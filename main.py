@@ -19,7 +19,7 @@ class gitMonitorModule(BaseModule):
     async def set_next_step(self, chat_id, step):
         self.next_step[chat_id] = step
 
-    async def _monitor_repo(self, chat_id: int):
+    async def _monitor_repo(self, chat_id: int, start_message_id: int):
         repo_url_parts = self.repo_url.split('/')
         owner, repo = repo_url_parts[-2], repo_url_parts[-1]
         api_url = f"https://api.github.com/repos/{self.repo_url.split('/')[-2]}/{self.repo_url.split('/')[-1].replace('.git', '')}/commits"
@@ -51,7 +51,7 @@ class gitMonitorModule(BaseModule):
                         f"<b>URL:</b> {commit_url}"
                     )
 
-                    await self.bot.send_message(chat_id, text)
+                    await self.bot.send_message(chat_id, text, reply_to_message_id=start_message_id)
 
                 last_commit_sha = data[0]["sha"]
 
@@ -90,10 +90,11 @@ class gitMonitorModule(BaseModule):
         # set repo url and start monitoring
         repo_url = message.text.split(" ", 1)[1]
         self.repo_url = repo_url
-        await message.reply_text(f"The {repo_url} repository will be monitored.")
-
+        start_message = await message.reply_text(f"The {repo_url} repository will be monitored.")
+        start_message_id = start_message.reply_to_message_id
+        
         # start monitoring task
-        self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id))
+        self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id, start_message_id))
         
     @command("git_reset")
     async def resetcmd(self, _, message: Message):
