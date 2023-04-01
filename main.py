@@ -20,6 +20,8 @@ class gitMonitorModule(BaseModule):
         self.next_step[chat_id] = step
 
     async def _monitor_repo(self, chat_id: int):
+        repo_url_parts = self.repo_url.split('/')
+        owner, repo = repo_url_parts[-2], repo_url_parts[-1]
         api_url = f"https://api.github.com/repos/{self.repo_url.split('/')[-2]}/{self.repo_url.split('/')[-1].replace('.git', '')}/commits"
         last_commit_sha = None
         while True:
@@ -40,9 +42,9 @@ class gitMonitorModule(BaseModule):
                     author = commit["author"]["name"]
                     message = commit["message"]
                     sha = data[0]["sha"][:5]
-                    repo_name = data[0]["repo"]["name"]
                     
                     text = (
+                        f"<b>New commit in:</b> {owner}/{repo}\n"
                         f"<b>Author:</b> {author}\n"
                         f"<b>Description:</b>\n {message}\n"
                         f"<b>SHA:</b> {sha}\n"
