@@ -53,11 +53,21 @@ class gitMonitorModule(BaseModule):
         owner, repo = repo_url_parts[-2], repo_url_parts[-1]
         api_url = f"https://api.github.com/repos/{self.repo_url.split('/')[-2]}/{self.repo_url.split('/')[-1].replace('.git', '')}/commits"
         last_commit_sha = None
+        etag = None
+        retries = 0
+        
         while True:
             try:
                 headers = {"Authorization": f"Token {self.github_token}"}
+                if etag:
+                    headers["If-None-Match"] = etag
+
                 async with aiohttp.ClientSession(headers=headers) as session:
                     async with session.get(api_url) as response:
+                        if response.status == 304:
+                            await asyncio.sleep(60)
+                            continue
+
                         response.raise_for_status()
                         data = await response.json()
 
@@ -77,9 +87,21 @@ class gitMonitorModule(BaseModule):
                     await self.bot.send_message(chat_id, text, reply_to_message_id=start_message_id)
 
                 last_commit_sha = data[0]["sha"]
+                etag = response.headers.get("ETag")
+                retries = 0
+
+            except aiohttp.ClientError as e:
+                if retries >= 5:
+                    self.logger.error(f"Error while monitoring repository {self.repo_url}: {e}")
+                    raise
+                retries += 1
+                self.logger.warning(f"Error while monitoring repository {self.repo_url}: {e}. Retrying in {60 * retries} seconds")
+                
+                await asyncio.sleep(60 * retries)
 
             except Exception as e:
                 self.logger.error(f"Error while monitoring repository {self.repo_url}: {e}")
+                raise
             finally:
                 await asyncio.sleep(60)
 
@@ -144,3 +166,4 @@ class gitMonitorModule(BaseModule):
         else:
             await message.reply_text(self.S["git_reset"]["err"])
             
+  
