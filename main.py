@@ -37,13 +37,18 @@ class gitMonitorModule(BaseModule):
             self.started_chats.add(chat_id)
 
     async def set_next_step(self, chat_id, step):
-        # save next step to database
-        self.db_conn.execute("""
-            INSERT OR REPLACE INTO chat_state (chat_id, next_step)
-            VALUES (?, ?)
-        """, (chat_id, step))
-        self.db_conn.commit()
-        self.next_step[chat_id] = step
+        try:
+            # save next step to database
+            self.db_conn.execute("""
+                INSERT OR REPLACE INTO chat_state (chat_id, next_step)
+                VALUES (?, ?)
+            """, (chat_id, step))
+            self.db_conn.commit()
+            self.next_step[chat_id] = step
+        except Exception as e:
+            # handle exception
+            self.logger.error(f"Error while saving next step for chat {chat_id}: {e}")
+
         
     async def get_next_step(self, chat_id):
         return self.next_step.get(chat_id, "start")
