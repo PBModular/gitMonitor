@@ -1,0 +1,23 @@
+_monitor_repo:
+  text: |
+    <b>New commit in:</b> {owner}/{repo}
+    <b>Author:</b> {author}
+    <b>Description:</b> {message}
+    <b>SHA:</b> <code>{sha}</code>
+    <b>URL:</b> {commit_url}
+
+git_start:
+  already_started: This command has already been executed in this chat.
+  welcome: |
+    <b>Welcome to gitMonitor Module!</b>
+    Please, use <code>/git_src <url></code>to configure your reposiory for monitoring.
+    Don't forget to past your GitHub token into main.py.
+
+git_src:
+  err_start: First run the /git_start command.
+  monitoring: The {repo_url} repository will be monitored.
+
+git_reset:
+  success: Repository monitoring is stopped and reset.
+  err: Repository monitoring is not running.
+  

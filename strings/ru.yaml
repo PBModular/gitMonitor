@@ -1,0 +1,23 @@
+_monitor_repo:
+  text: |
+    <b>Новый коммит в:</b> {owner}/{repo}
+    <b>Автор:</b> {author}
+    <b>Описание:</b> {message}
+    <b>SHA:</b> <code>{sha}</code>
+    <b>URL:</b> {commit_url}
+
+git_start:
+  already_started: Команда уже была выполнена в этом чате.
+  welcome: |
+    <b>Добро пожаловать в gitMonitor Module!</b>
+    Используйте <code>/git_src <url></code>для настройки вашего репозитория для мониторинга.
+    Не забудьте вставить свой токен GitHub в файл main.py.
+
+git_src:
+  err_start: Сначала выполните команду /git_start.
+  monitoring: Будет осуществляться мониторинг репозитория {repo_url}.
+
+git_reset:
+  success: Мониторинг репозитория остановлен и сброшен.
+  err: Мониторинг репозитория не запущен.
+  

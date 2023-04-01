@@ -43,14 +43,8 @@ class gitMonitorModule(BaseModule):
                     message = commit["message"]
                     sha = data[0]["sha"][:5]
 
-                    text = (
-                        f"<b>New commit in:</b> {owner}/{repo}\n"
-                        f"<b>Author:</b> {author}\n"
-                        f"<b>Description:</b>\n {message}\n"
-                        f"<b>SHA:</b> {sha}\n"
-                        f"<b>URL:</b> {commit_url}"
-                    )
-
+                    text = self.S["_monitor_repo"]["text"].format(owner=owner, repo=repo, author=author, 
+                                                                  message=message, sha=sha, commit_url=commit_url)
                     await self.bot.send_message(chat_id, text, reply_to_message_id=start_message_id)
 
                 last_commit_sha = data[0]["sha"]
@@ -67,7 +61,7 @@ class gitMonitorModule(BaseModule):
 
         # check if already started
         if chat_id in self.started_chats:
-            await message.reply_text("The command has already been executed in this chat.")
+            await message.reply_text(self.s["git_start"]["already_started"])
             return
 
         # set next step to set repo url
@@ -75,8 +69,7 @@ class gitMonitorModule(BaseModule):
         self.started_chats.add(chat_id) # add to started chats set
 
         # send welcome message
-        welcome_text = "Welcome to gitMonitor_module! Please, use /git_src <url> to configure your repo for monitoring.\n Don't forget to past your GitHub token into main.py."
-        await message.reply_text(welcome_text)
+        await message.reply_text(self.S["git_start"]["welcome"])
 
     @command("git_src")
     async def setrepocmd(self, _, message: Message):
@@ -84,13 +77,13 @@ class gitMonitorModule(BaseModule):
 
         # check if started with git_start
         if await self.get_next_step(chat_id) != "set_repo_url":
-            await message.reply_text("First run the /git_start command.")
+            await message.reply_text(self.S["git_src"]["err_start"])
             return
 
         # set repo url and start monitoring
         repo_url = message.text.split(" ", 1)[1]
         self.repo_url = repo_url
-        start_message = await message.reply_text(f"The {repo_url} repository will be monitored.")
+        start_message = await message.reply_text(self.S["git_src"]["monitoring"].format(repo_url=repo_url))
         start_message_id = start_message.reply_to_message_id
         
         # start monitoring task
@@ -102,6 +95,6 @@ class gitMonitorModule(BaseModule):
             self.monitor_task.cancel()
             self.monitor_task = None
             self.repo_url = None
-            await message.reply_text("Repository monitoring is stopped and reset.")
+            await message.reply_text(self.S["git_reset"]["success"])
         else:
-            await message.reply_text("Repository monitoring is not running.")
+            await message.reply_text(self.S["git_reset"]["err"])
