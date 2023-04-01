@@ -31,7 +31,7 @@ class gitMonitorModule(BaseModule):
                     async with session.get(api_url) as response:
                         response.raise_for_status()
                         data = await response.json()
-                        
+
                 if not data:
                     await asyncio.sleep(60)
                     continue
@@ -42,7 +42,7 @@ class gitMonitorModule(BaseModule):
                     author = commit["author"]["name"]
                     message = commit["message"]
                     sha = data[0]["sha"][:5]
-                    
+
                     text = (
                         f"<b>New commit in:</b> {owner}/{repo}\n"
                         f"<b>Author:</b> {author}\n"
@@ -54,7 +54,7 @@ class gitMonitorModule(BaseModule):
                     await self.bot.send_message(chat_id, text)
 
                 last_commit_sha = data[0]["sha"]
-                
+
             except Exception as e:
                 self.logger.error(f"Error while monitoring repository {self.repo_url}: {e}")
             finally:
@@ -67,7 +67,7 @@ class gitMonitorModule(BaseModule):
 
         # check if already started
         if chat_id in self.started_chats:
-            await message.reply_text("Команда уже была выполнена в этом чате.")
+            await message.reply_text("The command has already been executed in this chat.")
             return
 
         # set next step to set repo url
