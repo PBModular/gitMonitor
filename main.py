@@ -35,7 +35,11 @@ class gitMonitorModule(BaseModule):
             if start_message_id is not None:
                 self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id, start_message_id))
             self.started_chats.add(chat_id)
-
+            
+    def __del__(self):
+        # close the database connection
+        self.db_conn.close()
+        
     async def set_next_step(self, chat_id, step):
         try:
             # save next step to database
