@@ -1,5 +1,8 @@
 info:
-  name: gitMonitor_module
+  name: gitMonitor
   author: Ultra119
   version: 1.0.0
   description: Module for commits monitoring
+
+permissions:
+  - require_db

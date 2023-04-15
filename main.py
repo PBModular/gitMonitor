@@ -1,9 +1,13 @@
 from pyrogram.types import Message
 from base.module import BaseModule, command
-import sqlite3
 
+from sqlalchemy import select
+
+
+from .db import Base, ChatState
 import asyncio
 import aiohttp
+
 
 class gitMonitorModule(BaseModule):
     def __init__(self, *args, **kwargs):
@@ -14,46 +18,38 @@ class gitMonitorModule(BaseModule):
         self.next_step = {}
         self.started_chats = set()
 
-        # create database connection and table
-        self.db_conn = sqlite3.connect("git_monitor.db")
-        self.db_conn.execute("""
-            CREATE TABLE IF NOT EXISTS chat_state (
-                chat_id INTEGER PRIMARY KEY,
-                repo_url TEXT,
-                start_message_id INTEGER,
-                next_step TEXT
-            )
-        """)
-        self.db_conn.commit()
-
-        # load chat states from database
-        cursor = self.db_conn.execute("SELECT chat_id, repo_url, start_message_id, next_step FROM chat_state")
-        for row in cursor.fetchall():
-            chat_id, repo_url, start_message_id, next_step = row
-            self.repo_url = repo_url
-            self.next_step[chat_id] = next_step
-            if start_message_id is not None:
-                self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id, start_message_id))
-            self.started_chats.add(chat_id)
-            
-    def __del__(self):
-        # close the database connection
-        self.db_conn.close()
-        
+    @property
+    def db_meta(self):
+        return Base.metadata
+    
+    async def on_db_ready(self):
+        async with self.db.session_maker() as session:
+            # load chat states from database
+            chat_states = await session.scalars(select(ChatState))
+            for chat_state in chat_states:
+                chat_id, repo_url, start_message_id, next_step = chat_state.chat_id, chat_state.repo_url, chat_state.start_message_id, chat_state.next_step
+                self.repo_url = repo_url
+                self.next_step[chat_id] = next_step
+                if start_message_id is not None:
+                    self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id, start_message_id))
+                self.started_chats.add(chat_id)
+    
     async def set_next_step(self, chat_id, step):
         try:
-            # save next step to database
-            self.db_conn.execute("""
-                INSERT OR REPLACE INTO chat_state (chat_id, next_step)
-                VALUES (?, ?)
-            """, (chat_id, step))
-            self.db_conn.commit()
-            self.next_step[chat_id] = step
+            async with self.db.session_maker() as session:
+                # save next step to database
+                chat_state = await session.scalar(select(ChatState).where(ChatState.chat_id == chat_id))
+                if chat_state:
+                    chat_state.next_step = step
+                else:
+                    chat_state = ChatState(chat_id=chat_id, next_step=step)
+                    session.add(chat_state)
+                await session.commit()
+                self.next_step[chat_id] = step
         except Exception as e:
             # handle exception
             self.logger.error(f"Error while saving next step for chat {chat_id}: {e}")
 
-        
     async def get_next_step(self, chat_id):
         return self.next_step.get(chat_id, "start")
 
@@ -114,7 +110,6 @@ class gitMonitorModule(BaseModule):
             finally:
                 await asyncio.sleep(60)
 
-
     @command("git_start")
     async def startcmd(self, _, message: Message):
         chat_id = message.chat.id
@@ -145,14 +140,13 @@ class gitMonitorModule(BaseModule):
         self.repo_url = repo_url
         start_message = await message.reply_text(self.S["git_src"]["monitoring"].format(repo_url=repo_url))
         start_message_id = start_message.reply_to_message_id
-
-        # set chat state in database
-        self.db_conn.execute("""
-            INSERT OR REPLACE INTO chat_state (chat_id, repo_url, start_message_id, next_step)
-            VALUES (?, ?, ?, ?)
-        """, (chat_id, repo_url, start_message_id, "monitoring"))
-        self.db_conn.commit()
-
+        
+        async with self.db.session_maker() as session:
+            # set chat state in database
+            chat_state = ChatState(chat_id=chat_id, repo_url=repo_url, start_message_id=start_message_id)
+            session.add(chat_state)
+            await session.commit()
+        
         # start monitoring task
         self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id, start_message_id))
         
@@ -163,13 +157,6 @@ class gitMonitorModule(BaseModule):
             self.monitor_task.cancel()
             self.monitor_task = None
             self.repo_url = None
-            
-            # save chat state to database
-            self.db_conn.execute("""
-                INSERT OR REPLACE INTO chat_state (chat_id, repo_url, start_message_id, next_step)
-                VALUES (?, ?, NULL, 'start')
-            """, (chat_id, None))
-            self.db_conn.commit()
             
             await message.reply_text(self.S["git_reset"]["success"])
         else:

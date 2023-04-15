@@ -16,6 +16,7 @@ git_start:
 git_src:
   err_start: Сначала выполните команду /git_start.
   monitoring: Будет осуществляться мониторинг репозитория {repo_url}.
+  already_set: This link is already monitoring!
 
 git_reset:
   success: Мониторинг репозитория остановлен и сброшен.
