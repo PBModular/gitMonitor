@@ -14,7 +14,7 @@ class gitMonitorModule(BaseModule):
         super().__init__(*args, **kwargs)
         self.repo_url = None
         self.monitor_task = None
-        self.github_token = "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"
+        self.github_token = "<token>"
         self.next_step = {}
         self.started_chats = set()
 
@@ -23,22 +23,26 @@ class gitMonitorModule(BaseModule):
         return Base.metadata
     
     async def on_db_ready(self):
-        async with self.db.session_maker() as session:
-            # load chat states from database
-            chat_states = await session.scalars(select(ChatState))
-            for chat_state in chat_states:
-                chat_id, repo_url, start_message_id, next_step = chat_state.chat_id, chat_state.repo_url, chat_state.start_message_id, chat_state.next_step
-                self.repo_url = repo_url
-                self.next_step[chat_id] = next_step
-                if start_message_id is not None:
-                    self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id, start_message_id))
-                self.started_chats.add(chat_id)
-    
+        try:
+            async with self.db.session_maker() as session:
+                # load chat states from database
+                chat_states = await session.scalars(select(ChatState))
+                for chat_state in chat_states:
+                    chat_id, repo_url, start_message_id, next_step = chat_state.chat_id, chat_state.repo_url, chat_state.start_message_id, chat_state.next_step
+                    self.repo_url = repo_url
+                    self.next_step[chat_id] = next_step
+                    if start_message_id is not None:
+                        self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id, start_message_id))
+                    self.started_chats.add(chat_id)
+        except Exception as e:
+            # handle exception
+            self.logger.error(f"Error while loading chat states: {e}")
+            
     async def set_next_step(self, chat_id, step):
         try:
             async with self.db.session_maker() as session:
                 # save next step to database
-                chat_state = await session.scalar(select(ChatState).where(ChatState.chat_id == chat_id))
+                chat_state = await session.scalar(select(ChatState))
                 if chat_state:
                     chat_state.next_step = step
                 else:
@@ -119,10 +123,15 @@ class gitMonitorModule(BaseModule):
             await message.reply_text(self.S["git_start"]["already_started"])
             return
 
-        # set next step to set repo url
-        await self.set_next_step(chat_id, "set_repo_url")
-        self.started_chats.add(chat_id) # add to started chats set
-
+        try:
+            # set next step to set repo url
+            await self.set_next_step(chat_id, "set_repo_url")
+            self.started_chats.add(chat_id) # add to started chats set
+        except Exception as e:
+            # handle exception
+            self.logger.error(f"Error while starting chat {chat_id}: {e}")
+            return
+        
         # send welcome message
         await message.reply_text(self.S["git_start"]["welcome"])
 
