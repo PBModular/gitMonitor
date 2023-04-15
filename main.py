@@ -150,11 +150,29 @@ class gitMonitorModule(BaseModule):
         start_message = await message.reply_text(self.S["git_src"]["monitoring"].format(repo_url=repo_url))
         start_message_id = start_message.reply_to_message_id
         
-        async with self.db.session_maker() as session:
-            # set chat state in database
-            chat_state = ChatState(chat_id=chat_id, repo_url=repo_url, start_message_id=start_message_id)
-            session.add(chat_state)
-            await session.commit()
+        # save chat state to database
+        try:
+            async with self.db.session_maker() as session:
+                # check if chat state already exists for chat ID
+                chat_state = await session.scalar(select(ChatState))
+                if chat_state:
+                    # update existing chat state
+                    chat_state.repo_url = repo_url
+                    chat_state.start_message_id = start_message_id
+                    chat_state.next_step = "start"
+                    session.add(chat_state)
+
+                else:
+                    # create new chat state
+                    chat_state = ChatState(chat_id=chat_id, repo_url=repo_url, start_message_id=start_message_id, next_step="start")
+                    session.add(chat_state)
+
+                await session.commit()
+
+        except Exception as e:
+            # handle exception
+            self.logger.error(f"Error while setting repository {repo_url}: {e}")
+            return
         
         # start monitoring task
         self.monitor_task = asyncio.create_task(self._monitor_repo(chat_id, start_message_id))
