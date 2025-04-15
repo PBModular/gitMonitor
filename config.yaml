@@ -1,8 +1,13 @@
 info:
   name: gitMonitor
   author: Ultra119
-  version: 1.0.0
+  version: 1.0
   description: Module for commits monitoring
+  python: 3.13
 
 permissions:
   - require_db
+
+config:
+  api_token: "" # Place for YOUR GitHub API Token
+

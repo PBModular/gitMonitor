@@ -1,24 +1,24 @@
-_monitor_repo:
-  text: |
-    <b>New commit in:</b> {owner}/{repo}
-    <b>Author:</b> {author}
-    <b>Description:</b> {message}
-    <b>SHA:</b> <code>{sha}</code>
-    <b>URL:</b> {commit_url}
-
-git_start:
-  already_started: This command has already been executed in this chat.
-  welcome: |
-    <b>Welcome to gitMonitor Module!</b>
-    Please, use <code>/git_src <url></code>to configure your reposiory for monitoring.
-    Don't forget to past your GitHub token into main.py.
-
-git_src:
-  err_start: First run the /git_start command.
-  monitoring: The {repo_url} repository will be monitored.
-  already_set: This link is already monitoring!
-
-git_reset:
-  success: Repository monitoring is stopped and reset.
-  err: Repository monitoring is not running.
-  
+help: |
+  Use /git_monitor <github_repo_url> to start monitoring a repository for new commits.
+  Example: `/git_monitor https://github.com/user/repo`
+  Use /git_stop to stop monitoring in this chat.
+set_repo:
+  usage: "Usage: /git_monitor <github_repo_url>"
+  invalid_url: "Invalid GitHub URL provided: {repo_url}\nPlease use the format: https://github.com/owner/repository"
+  starting: "🔄 Setting up monitor for {owner}/{repo}..."
+  success: "✅ Now monitoring repository {owner}/{repo} for new commits."
+  error_generic: "❌ An error occurred while setting up the repository monitor. Please try again later."
+stop:
+  not_monitoring: "ℹ️ No active GitHub repository monitor found for this chat."
+  success: "✅ Stopped monitoring GitHub commits in this chat."
+  error: "❌ An error occurred while stopping the monitor."
+monitor:
+  new_commit: |
+    📦 New commit in <b>{owner}/{repo}</b>
+    👤 <b>Author:</b> {author}
+    📝 <i>{message}</i>
+    🔗 [{sha}]({commit_url})
+  repo_not_found: "❌ Repository not found: {repo_url}\nMonitoring stopped. Please check the URL and use /git_monitor again."
+  auth_error: "❌ Authentication error accessing {repo_url}.\nPlease check the bot's GitHub token. Monitoring stopped."
+  network_error: "❌ Could not reach GitHub after multiple retries for {repo_url}.\nMonitoring stopped. Please check network or try again later."
+  internal_error: "❌ An internal error occurred while monitoring {repo_url}.\nMonitoring stopped. Please report this issue."
