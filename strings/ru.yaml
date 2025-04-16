@@ -1,7 +1,8 @@
 help: |
-  Используйте /git_monitor <github_repo_url> для начала отслеживания новых коммитов в репозитории.
-  Пример: `/git_monitor https://github.com/user/repo`
-  Используйте /git_stop, чтобы остановить отслеживание в этом чате.
+  <b>Команды:</b>
+  <code>/git_monitor <repo_url></code> - Начинает мониторинг указанного репозитория GitHub (например, <code>https://github.com/owner/repo</code>).
+  <code>/git_stop</code> - Прекрать отслеживать коммиты.
+  <code>/git_interval <seconds></code> - Установить пользовательский интервал проверки коммитов (min: {min_interval}с).
 set_repo:
   usage: "Использование: /git_monitor <github_repo_url>"
   invalid_url: "Указан неверный URL GitHub: {repo_url}\nПожалуйста, используйте формат: https://github.com/owner/repository"
@@ -22,3 +23,9 @@ monitor:
   auth_error: "❌ Ошибка аутентификации при доступе к {repo_url}.\nПожалуйста, проверьте GitHub токен бота. Мониторинг остановлен."
   network_error: "❌ Не удалось подключиться к GitHub после нескольких попыток для {repo_url}.\nМониторинг остановлен. Пожалуйста, проверьте сеть или попробуйте позже."
   internal_error: "❌ Произошла внутренняя ошибка при мониторинге {repo_url}.\nМониторинг остановлен. Пожалуйста, сообщите об этой проблеме."
+git_interval:
+  usage: "Использование: /git_interval <seconds>"
+  min_interval: "ℹ️ Интервал должен составлять не менее 10 секунд."
+  invalid_interval: "❌ Неверный интервал. Пожалуйста, укажите целое число."
+  no_repo: "ℹ️ В этом чате не ведется наблюдение за репозиторием."
+  success: "✅ Интервал проверки установлен на {seconds} секунд."

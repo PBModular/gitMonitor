@@ -1,7 +1,8 @@
 help: |
-  Use /git_monitor <github_repo_url> to start monitoring a repository for new commits.
-  Example: `/git_monitor https://github.com/user/repo`
-  Use /git_stop to stop monitoring in this chat.
+  <b>Commands:</b>
+  <code>/git_monitor <repo_url></code> - Start monitoring the specified GitHub repository (e.g., <code>https://github.com/owner/repo</code>).
+  <code>/git_stop</code> - Stop monitoring commits.
+  <code>/git_interval <seconds></code> - Set a custom commit check interval (min: {min_interval}s).
 set_repo:
   usage: "Usage: /git_monitor <github_repo_url>"
   invalid_url: "Invalid GitHub URL provided: {repo_url}\nPlease use the format: https://github.com/owner/repository"
@@ -22,3 +23,9 @@ monitor:
   auth_error: "❌ Authentication error accessing {repo_url}.\nPlease check the bot's GitHub token. Monitoring stopped."
   network_error: "❌ Could not reach GitHub after multiple retries for {repo_url}.\nMonitoring stopped. Please check network or try again later."
   internal_error: "❌ An internal error occurred while monitoring {repo_url}.\nMonitoring stopped. Please report this issue."
+git_interval:
+  usage: "Usage: /git_interval <seconds>"
+  min_interval: "ℹ️ Interval must be at least 10 seconds."
+  invalid_interval: "❌ Invalid interval. Please provide an integer."
+  no_repo: "ℹ️ No repository is being monitored in this chat."
+  success: "✅ Check interval set to {seconds} seconds."
