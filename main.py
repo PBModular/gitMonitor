@@ -87,21 +87,6 @@ class gitMonitorModule(BaseModule):
         await session.commit()
         self.logger.info(f"Removed database entry for chat {chat_id}")
 
-    def _parse_github_url(self, url: str) -> tuple[str | None, str | None]:
-        """Parses a GitHub URL to extract owner and repo."""
-        try:
-            parsed = urlparse(url)
-            if parsed.netloc.lower() != 'github.com':
-                return None, None
-            path_parts = [part for part in parsed.path.strip('/').split('/') if part]
-            if len(path_parts) >= 2:
-                owner = path_parts[0]
-                repo = path_parts[1].replace('.git', '')
-                return owner, repo
-        except Exception:
-            pass
-        return None, None
-
     async def _monitor_repo(self, chat_id: int, repo_url: str):
         """Core task to monitor a GitHub repository for new commits."""
         owner, repo = self._parse_github_url(repo_url)
