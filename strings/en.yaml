@@ -1,31 +1,47 @@
 help: |
+  <b>GitHub Repository Monitor</b>
+  Monitors one or more GitHub repositories for new commits.
+
   <b>Commands:</b>
-  <code>/git_monitor <repo_url></code> - Start monitoring the specified GitHub repository (e.g., <code>https://github.com/owner/repo</code>).
-  <code>/git_stop</code> - Stop monitoring commits.
-  <code>/git_interval <seconds></code> - Set a custom commit check interval (min: {min_interval}s).
-set_repo:
-  usage: "Usage: /git_monitor <github_repo_url>"
-  invalid_url: "Invalid GitHub URL provided: {repo_url}\nPlease use the format: https://github.com/owner/repository"
-  starting: "🔄 Setting up monitor for {owner}/{repo}..."
+  <code>/git_add <repo_url></code> - Start monitoring a new GitHub repository (e.g., <code>https://github.com/owner/repo</code>).
+  <code>/git_remove <repo_url></code> - Stop monitoring the specified repository.
+  <code>/git_list</code> - List all repositories currently being monitored.
+  <code>/git_interval <repo_url> <seconds></code> - Set a custom commit check interval for a specific repository.
+add_repo:
+  usage: "Usage: /git_add <github_repo_url>"
+  invalid_url: "❌ Invalid GitHub URL provided: {repo_url}\nPlease use the format: https://github.com/owner/repository"
+  starting: "🔄 Adding monitor for {owner}/{repo}..."
   success: "✅ Now monitoring repository {owner}/{repo} for new commits."
-  error_generic: "❌ An error occurred while setting up the repository monitor. Please try again later."
-stop:
-  not_monitoring: "ℹ️ No active GitHub repository monitor found for this chat."
-  success: "✅ Stopped monitoring GitHub commits in this chat."
-  error: "❌ An error occurred while stopping the monitor."
+  error_generic: "❌ An error occurred while adding the repository monitor. Please try again later."
+  already_monitoring: "ℹ️ Repository {owner}/{repo} is already being monitored."
+remove_repo:
+  usage: "Usage: /git_remove <github_repo_url>"
+  usage_hint: "ℹ️ Use /git_list to see the URLs of repositories currently being monitored."
+  not_found: "ℹ️ Repository {repo_url} is not currently being monitored."
+  success: "✅ Stopped monitoring repository {owner}/{repo}."
+  error: "❌ An error occurred while removing the repository monitor."
+list_repos:
+  header: "ℹ️ Currently monitored repositories:"
+  none: "ℹ️ No GitHub repositories are currently being monitored."
+  error: "❌ An error occurred while fetching the list of monitored repositories."
 monitor:
   new_commit: |
     📦 New commit in <b>{owner}/{repo}</b>
     👤 <b>Author:</b> {author}
     📝 <i>{message}</i>
     🔗 [{sha}]({commit_url})
-  repo_not_found: "❌ Repository not found: {repo_url}\nMonitoring stopped. Please check the URL and use /git_monitor again."
-  auth_error: "❌ Authentication error accessing {repo_url}.\nPlease check the bot's GitHub token. Monitoring stopped."
-  network_error: "❌ Could not reach GitHub after multiple retries for {repo_url}.\nMonitoring stopped. Please check network or try again later."
-  internal_error: "❌ An internal error occurred while monitoring {repo_url}.\nMonitoring stopped. Please report this issue."
+  repo_not_found: "❌ Repository not found: {repo_url}\nMonitoring stopped for this repository. Please check the URL or remove it using /git_remove."
+  auth_error: "❌ Authentication error accessing {repo_url}.\nPlease check the bot's GitHub token. Monitoring stopped for this repository."
+  network_error: "❌ Could not reach GitHub after multiple retries for {repo_url}.\nMonitoring stopped for this repository. Please check network or try again later."
+  internal_error: "❌ An internal error occurred while monitoring {repo_url}.\nMonitoring stopped for this repository. Please report this issue."
+  rate_limit_error: "❌ GitHub rate limit or access issue persisted for {repo_url}.\nMonitoring stopped for this repository. Check token or wait."
+  invalid_data_error: "❌ Received unexpected data from GitHub API for {repo_url} after multiple retries.\nMonitoring stopped for this repository."
 git_interval:
-  usage: "Usage: /git_interval <seconds>"
-  min_interval: "ℹ️ Interval must be at least 10 seconds."
-  invalid_interval: "❌ Invalid interval. Please provide an integer."
-  no_repo: "ℹ️ No repository is being monitored in this chat."
-  success: "✅ Check interval set to {seconds} seconds."
+  usage: "Usage: /git_interval <repo_url> <seconds>"
+  usage_hint: "ℹ️ Use /git_list to see the URLs of repositories currently being monitored."
+  min_interval: "ℹ️ Interval must be at least {min_interval} seconds."
+  invalid_interval: "❌ Invalid interval. Please provide a whole number of seconds (e.g., 60)."
+  not_found: "ℹ️ Repository {repo_url} is not currently being monitored."
+  success: "✅ Check interval for {owner}/{repo} set to {seconds} seconds. Monitor restarted."
+  error_generic: "❌ An error occurred while setting the interval."
+  error_restart: "❌ Interval updated in database, but failed to restart the monitor task. Please try removing and re-adding the repository if issues persist."
