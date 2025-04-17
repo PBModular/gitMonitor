@@ -34,9 +34,8 @@ monitor:
     📦 <b>{count} new commits</b> in <b>{owner}/{repo}</b>
 
     {commit_list}
-    {ellipsis}
-    🔗 Latest: <a href="{latest_commit_url}">{latest_sha}</a>
   commit_line: "• <a href=\"{url}\">{sha}</a>: {message} (<i>{author}</i>)"
+  more: "\n🔗<a href=\"{compare_url}\">More...</a>"
   repo_not_found: "❌ Repository not found: <code>{repo_url}</code>\nMonitoring stopped for this repository. Please check the URL or remove it using /git_remove."
   auth_error: "❌ Authentication error accessing <code>{repo_url}</code>.\nPlease check the bot's GitHub token. Monitoring stopped for this repository."
   network_error: "❌ Could not reach GitHub after multiple retries for <code>{repo_url}</code>.\nMonitoring stopped for this repository. Please check network or try again later."

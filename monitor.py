@@ -82,7 +82,7 @@ async def monitor_repo(
                         if response.status == 403:
                             rate_limit_reset = response.headers.get('X-RateLimit-Reset', '')
                             try:
-                                reset_time_str = f" (resets at {datetime.fromtimestamp(int(rate_limit_reset)).strftime('%Y-%m-%d %H:%M:%S %Z')})" if rate_limit_reset else ""
+                                reset_time_str = f" (resets at {datetime.datetime.fromtimestamp(int(rate_limit_reset)).strftime('%Y-%m-%d %H:%M:%S %Z')})" if rate_limit_reset else ""
                             except ValueError:
                                 reset_time_str = ""
                             logger.warning(f"Forbidden/Rate Limit (403) for {owner}/{repo}{reset_time_str}. Retrying after delay.")
@@ -204,17 +204,22 @@ async def monitor_repo(
                                         latest_commit = new_commits_data[0]
                                         latest_sha_short = latest_commit['sha'][:7]
                                         latest_commit_url = escape(latest_commit.get("html_url", "#"))
-                                        ellipsis = "\n..." if count > MAX_COMMITS_TO_LIST else ""
+
+                                        more_link = ""
+                                        if count > MAX_COMMITS_TO_LIST:
+                                            oldest_sha = new_commits_data[-1]['sha'][:7]
+                                            newest_sha = new_commits_data[0]['sha']
+                                            compare_url = escape(f"https://github.com/{owner}/{repo}/compare/{oldest_sha}...{newest_sha}")
+                                            more_link = strings["monitor"]["more"].format(compare_url=compare_url)
 
                                         text = strings["monitor"]["multiple_new_commits"].format(
                                             count=count,
                                             owner=escape(owner),
                                             repo=escape(repo),
                                             commit_list="\n".join(commit_list_lines),
-                                            ellipsis=ellipsis,
                                             latest_sha=latest_sha_short,
                                             latest_commit_url=latest_commit_url
-                                        )
+                                        ) + more_link
 
                                     await bot.send_message(chat_id, text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
                                     logger.info(f"Sent notification for {len(new_commits_data)} commit(s) to chat {chat_id} for {owner}/{repo}.")
@@ -243,7 +248,6 @@ async def monitor_repo(
                                             )
                                 except Exception as db_e:
                                      logger.error(f"Failed to update ETag in DB for repo ID {repo_db_id}: {db_e}", exc_info=True)
-
 
                         # Reset retries on successful check (304 or 200 OK)
                         retries = 0
