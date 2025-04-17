@@ -1,7 +1,7 @@
 info:
   name: gitMonitor
   author: Ultra119
-  version: 1.0
+  version: 1.1
   description: Module for commits monitoring
   python: 3.13
 
@@ -10,5 +10,5 @@ permissions:
 
 config:
   api_token: ""  # Place for YOUR GitHub API Token
-  default_check_interval: 60  # Default interval in seconds between checks
+  default_check_interval: 300  # Default interval in seconds between checks
   max_retries: 5  # Maximum number of retries after network errors
