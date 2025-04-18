@@ -1,7 +1,7 @@
 import asyncio
 import aiohttp
 import logging
-from .utils import parse_github_url
+from .utils import parse_github_url, get_merge_info
 from .db import MonitoredRepo
 from pyrogram.errors import RPCError
 from pyrogram.enums import ParseMode
@@ -166,6 +166,15 @@ async def monitor_repo(
                                 try:
                                     if len(new_commits_data) == 1:
                                         commit = new_commits_data[0]
+                                        merge_info = get_merge_info(commit)
+                                        merge_indicator = ''
+                                        if merge_info:
+                                            if merge_info["type"] == "pr":
+                                                pr_url = f"https://github.com/{owner}/{repo}/pull/{merge_info['number']}"
+                                                merge_indicator = f' [<a href="{pr_url}">PR #{merge_info["number"]} merged</a>]'
+                                            else:
+                                                merge_indicator = ' [Merge commit]'
+                                        
                                         commit_info = commit.get("commit", {})
                                         author_info = commit_info.get("author", {})
                                         author_name = escape(author_info.get("name", "Unknown"))
@@ -178,13 +187,23 @@ async def monitor_repo(
                                             repo=escape(repo),
                                             author=author_name,
                                             message=commit_message,
+                                            merge_indicator=merge_indicator,
                                             sha=sha_short,
                                             commit_url=commit_url
                                         )
                                     else:
                                         count = len(new_commits_data)
                                         commit_list_lines = []
-                                        for i, commit in enumerate(reversed(new_commits_data[:MAX_COMMITS_TO_LIST])):
+                                        for commit in reversed(new_commits_data[:MAX_COMMITS_TO_LIST]):
+                                            merge_info = get_merge_info(commit)
+                                            merge_indicator = ''
+                                            if merge_info:
+                                                if merge_info["type"] == "pr":
+                                                    pr_url = f"https://github.com/{owner}/{repo}/pull/{merge_info['number']}"
+                                                    merge_indicator = f' [<a href="{pr_url}">PR #{merge_info["number"]}</a>]'
+                                                else:
+                                                    merge_indicator = ' [Merge]'
+                                            
                                             commit_info = commit.get("commit", {})
                                             author_info = commit_info.get("author", {})
                                             author_name = escape(author_info.get("name", "Unknown"))
@@ -197,6 +216,7 @@ async def monitor_repo(
                                                     url=commit_url,
                                                     sha=sha_short,
                                                     message=commit_message,
+                                                    merge_indicator=merge_indicator,
                                                     author=author_name
                                                 )
                                             )
