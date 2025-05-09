@@ -1,15 +1,18 @@
 import asyncio
-import aiohttp
 import logging
-from .utils import parse_github_url, get_merge_info
+from .utils import parse_github_url
 from . import db_ops
+from .github_api import GitHubAPIClient, APIError, NotFoundError, UnauthorizedError, ForbiddenError, ClientRequestError, InvalidResponseError
+from .commit_processing import identify_new_commits, format_single_commit_message, format_multiple_commits_message
+
 from pyrogram.errors import RPCError
 from pyrogram.enums import ParseMode
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from html import escape
 import datetime
+import aiohttp
 
-MAX_COMMITS_TO_LIST = 4
+MAX_COMMITS_TO_LIST_IN_NOTIFICATION = 4
 
 async def monitor_repo(
     bot,
@@ -25,280 +28,198 @@ async def monitor_repo(
     async_session_maker: async_sessionmaker[AsyncSession]
 ):
     """
-    Monitors a single GitHub repository for new commits. Handles multiple new commits.
-
-    Returns True if monitoring should stop permanently (e.g., 404, 401), False otherwise.
+    Monitors a single GitHub repository for new commits.
+    Returns True if monitoring should stop permanently, False otherwise.
     """
     logger = logging.getLogger(f"gitMonitor[{chat_id}][{repo_db_id}]")
     owner, repo = parse_github_url(repo_url)
     if not owner or not repo:
-        logger.error(f"Invalid repo URL received in monitor: {repo_url}. Stopping.")
+        logger.error(f"Invalid repo URL: {repo_url}. Stopping.")
         try:
             await bot.send_message(chat_id, f"Internal error: Invalid repo URL {escape(repo_url)} passed to monitor. Stopping.")
         except Exception:
             pass
         return True
 
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/commits"
-    last_commit_sha = initial_last_sha
-    etag = initial_etag
+    api_client = GitHubAPIClient(token=github_token, loop=asyncio.get_event_loop())
+    current_last_sha = initial_last_sha
+    current_etag = initial_etag
     retries = 0
-    headers = {"Accept": "application/vnd.github.v3+json"}
-    if github_token:
-        headers["Authorization"] = f"Bearer {github_token}"
 
-    logger.info(f"Starting monitor for {owner}/{repo} (ID: {repo_db_id}). Interval: {check_interval}s. Initial SHA: {last_commit_sha[:7] if last_commit_sha else 'None'}")
+    logger.info(f"Starting monitor for {owner}/{repo} (ID: {repo_db_id}). Interval: {check_interval}s. Initial SHA: {current_last_sha[:7] if current_last_sha else 'None'}")
 
     try:
         while True:
-            current_headers = headers.copy()
-            if etag:
-                current_headers["If-None-Match"] = etag
-
-            new_commits_data = []
-
             try:
-                async with aiohttp.ClientSession(headers=current_headers) as http_session:
-                    async with http_session.get(api_url, params={"per_page": 30}, timeout=30) as response:
-                        # Handle 304 Not Modified
-                        if response.status == 304:
-                            logger.debug(f"No new commits for {owner}/{repo} (ETag match).")
-                            retries = 0
-                            await asyncio.sleep(check_interval)
-                            continue
+                api_response = await api_client.fetch_commits(owner, repo, etag=current_etag, per_page=30)
 
-                        # Handle permanent errors (404, 401)
-                        if response.status == 404:
-                            logger.error(f"Repository {owner}/{repo} not found (404). Stopping monitor.")
-                            await bot.send_message(chat_id, strings["monitor"]["repo_not_found"].format(repo_url=escape(repo_url)))
-                            return True
-                        if response.status == 401:
-                            logger.error(f"Unauthorized (401) for {owner}/{repo}. Check token. Stopping monitor.")
-                            await bot.send_message(chat_id, strings["monitor"]["auth_error"].format(repo_url=escape(repo_url)))
-                            return True
+                if api_response.status_code == 304: # Not Modified
+                    logger.debug(f"No new commits for {owner}/{repo} (304 Not Modified). ETag: {api_response.etag}")
+                    if api_response.etag and api_response.etag != current_etag:
+                        logger.info(f"ETag changed on 304 for {owner}/{repo}. Old: {current_etag}, New: {api_response.etag}. Updating.")
+                        current_etag = api_response.etag
+                        async with async_session_maker() as session:
+                            async with session.begin():
+                                await db_ops.update_repo_fields(session, repo_db_id, etag=current_etag)
+                    retries = 0
+                    await asyncio.sleep(check_interval)
+                    continue
 
-                        # Handle temporary errors (403 Rate Limit/Forbidden)
-                        if response.status == 403:
-                            rate_limit_reset = response.headers.get('X-RateLimit-Reset', '')
-                            try:
-                                reset_time_str = f" (resets at {datetime.datetime.fromtimestamp(int(rate_limit_reset)).strftime('%Y-%m-%d %H:%M:%S %Z')})" if rate_limit_reset else ""
-                            except ValueError:
-                                reset_time_str = ""
-                            logger.warning(f"Forbidden/Rate Limit (403) for {owner}/{repo}{reset_time_str}. Retrying after delay.")
-                            retries += 1
-                            if retries >= max_retries:
-                                logger.error(f"Rate limit / Forbidden error persisted after {max_retries} retries for {owner}/{repo}. Stopping monitor.")
-                                await bot.send_message(chat_id, strings["monitor"]["rate_limit_error"].format(repo_url=escape(repo_url)))
-                                return True
-                            wait_time = check_interval * (2 ** retries)
-                            logger.info(f"Waiting {wait_time}s before next check for {owner}/{repo}")
-                            await asyncio.sleep(wait_time)
-                            continue
+                # Successful response (200 OK)
+                github_commits_data = api_response.data
+                new_etag_from_response = api_response.etag
 
-                        response.raise_for_status()
-
-                        # Process successful response
-                        data = await response.json()
-                        new_etag = response.headers.get("ETag")
-
-                        if not data or not isinstance(data, list) or not data[0].get("sha"):
-                            logger.warning(f"Invalid/empty data received from GitHub API for {owner}/{repo}. Retrying.")
-                            retries += 1
-                            if retries >= max_retries:
-                                logger.error(f"Received invalid data after {max_retries} retries for {owner}/{repo}. Stopping monitor.")
-                                await bot.send_message(chat_id, strings["monitor"]["invalid_data_error"].format(repo_url=escape(repo_url)))
-                                return True
-                            await asyncio.sleep(check_interval * (2**(retries-1)))
-                            continue
-
-                        latest_commit_sha_on_github = data[0]["sha"]
-
-                        if last_commit_sha is None:
-                            logger.info(f"Initialized monitor for {owner}/{repo}. Last commit: {latest_commit_sha_on_github[:7]}")
-                            last_commit_sha = latest_commit_sha_on_github
-                            etag = new_etag
-                            try:
-                                async with async_session_maker() as session:
-                                    async with session.begin():
-                                        await db_ops.update_repo_fields(
-                                            session,
-                                            repo_db_id,
-                                            last_commit_sha=last_commit_sha,
-                                            etag=etag
-                                        )
-                                    logger.debug(f"DB initialized for {owner}/{repo} (ID: {repo_db_id}). SHA: {last_commit_sha[:7]}, ETag: {etag}")
-                            except Exception as db_e:
-                                logger.error(f"Failed to update DB state on initialization for repo ID {repo_db_id}: {db_e}", exc_info=True)
-
-                        elif latest_commit_sha_on_github != last_commit_sha:
-                            logger.info(f"Change detected for {owner}/{repo}. Known SHA: {last_commit_sha[:7]}, Latest SHA: {latest_commit_sha_on_github[:7]}. Fetching details...")
-                            found_last_sha = False
-                            for commit_data in data:
-                                if commit_data["sha"] == last_commit_sha:
-                                    found_last_sha = True
-                                    break
-                                new_commits_data.append(commit_data)
-
-                            if not found_last_sha:
-                                logger.warning(f"Previously known SHA {last_commit_sha[:7]} not found in recent commits for {owner}/{repo}. \
-                                               Possible force push or very large number of commits. Reporting only the latest {len(new_commits_data)} fetched (up to 30).")
-
-                            if new_commits_data:
-                                logger.info(f"Found {len(new_commits_data)} new commit(s) for {owner}/{repo}.")
-                                new_last_sha_to_store = new_commits_data[0]['sha']
-                                try:
-                                    async with async_session_maker() as session:
-                                        async with session.begin():
-                                            await db_ops.update_repo_fields(
-                                                session,
-                                                repo_db_id,
-                                                last_commit_sha=new_last_sha_to_store,
-                                                etag=new_etag
-                                            )
-                                        last_commit_sha = new_last_sha_to_store
-                                        etag = new_etag
-                                        logger.debug(f"Updated DB for {owner}/{repo} (ID: {repo_db_id}). New SHA: {last_commit_sha[:7]}, ETag: {etag}")
-                                except Exception as db_e:
-                                    logger.error(f"Failed to update DB state for repo ID {repo_db_id} after finding new commits: {db_e}", exc_info=True)
-                                    await asyncio.sleep(check_interval)
-                                    continue
-
-                                # Prepare and Send Notification
-                                try:
-                                    if len(new_commits_data) == 1:
-                                        commit = new_commits_data[0]
-                                        merge_info = get_merge_info(commit)
-                                        merge_indicator = ''
-                                        if merge_info:
-                                            if merge_info["type"] == "pr":
-                                                pr_url = f"https://github.com/{owner}/{repo}/pull/{merge_info['number']}"
-                                                merge_indicator = f' [<a href="{pr_url}">PR #{merge_info["number"]} merged</a>]'
-                                            else:
-                                                merge_indicator = ' [Merge commit]'
-                                        
-                                        commit_info = commit.get("commit", {})
-                                        author_info = commit_info.get("author", {})
-                                        author_name = escape(author_info.get("name", "Unknown"))
-                                        commit_message = escape(commit_info.get("message", "No message").split('\n')[0])
-                                        sha_short = commit['sha'][:7]
-                                        commit_url = escape(commit.get("html_url", "#"))
-
-                                        text = strings["monitor"]["new_commit"].format(
-                                            owner=escape(owner),
-                                            repo=escape(repo),
-                                            author=author_name,
-                                            message=commit_message,
-                                            merge_indicator=merge_indicator,
-                                            sha=sha_short,
-                                            commit_url=commit_url
-                                        )
-                                    else:
-                                        count = len(new_commits_data)
-                                        commit_list_lines = []
-                                        for commit in reversed(new_commits_data[:MAX_COMMITS_TO_LIST]):
-                                            merge_info = get_merge_info(commit)
-                                            merge_indicator = ''
-                                            if merge_info:
-                                                if merge_info["type"] == "pr":
-                                                    pr_url = f"https://github.com/{owner}/{repo}/pull/{merge_info['number']}"
-                                                    merge_indicator = f' [<a href="{pr_url}">PR #{merge_info["number"]}</a>]'
-                                                else:
-                                                    merge_indicator = ' [Merge]'
-                                            
-                                            commit_info = commit.get("commit", {})
-                                            author_info = commit_info.get("author", {})
-                                            author_name = escape(author_info.get("name", "Unknown"))
-                                            commit_message = escape(commit_info.get("message", "No message").split('\n')[0])
-                                            sha_short = commit['sha'][:7]
-                                            commit_url = escape(commit.get("html_url", "#"))
-
-                                            commit_list_lines.append(
-                                                strings["monitor"]["commit_line"].format(
-                                                    url=commit_url,
-                                                    sha=sha_short,
-                                                    message=commit_message,
-                                                    merge_indicator=merge_indicator,
-                                                    author=author_name
-                                                )
-                                            )
-
-                                        latest_commit_notif = new_commits_data[0]
-                                        latest_sha_short_notif = latest_commit_notif['sha'][:7]
-                                        latest_commit_url_notif = escape(latest_commit_notif.get("html_url", "#"))
-
-                                        more_link = ""
-                                        if count > MAX_COMMITS_TO_LIST:
-                                            compare_url_base = last_commit_sha
-                                            compare_url_head = new_commits_data[0]['sha']
-                                            compare_url = escape(f"https://github.com/{owner}/{repo}/compare/{compare_url_base}...{compare_url_head}")
-                                            more_link = strings["monitor"]["more"].format(compare_url=compare_url)
+                if not github_commits_data or not isinstance(github_commits_data, list) or not github_commits_data[0].get("sha"):
+                    logger.warning(f"Invalid or empty commit data from GitHub API for {owner}/{repo} despite 200 OK. Retrying.")
+                    raise ClientRequestError(200, "Received empty or malformed commit list on 200 OK")
 
 
-                                        text = strings["monitor"]["multiple_new_commits"].format(
-                                            count=count,
-                                            owner=escape(owner),
-                                            repo=escape(repo),
-                                            commit_list="\n".join(commit_list_lines),
-                                            latest_sha=latest_sha_short_notif,
-                                            latest_commit_url=latest_commit_url_notif
-                                        ) + more_link
+                newly_found_commits, latest_sha_on_github, is_initial, force_pushed_or_many = \
+                    identify_new_commits(github_commits_data, current_last_sha)
 
-                                    await bot.send_message(chat_id, text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
-                                    logger.info(f"Sent notification for {len(new_commits_data)} commit(s) to chat {chat_id} for {owner}/{repo}.")
+                if is_initial:
+                    logger.info(f"Initial run for {owner}/{repo}. Setting last commit to {latest_sha_on_github[:7]}.")
+                    current_last_sha = latest_sha_on_github
+                    current_etag = new_etag_from_response
+                    async with async_session_maker() as session:
+                        async with session.begin():
+                            await db_ops.update_repo_fields(
+                                session, repo_db_id,
+                                last_commit_sha=current_last_sha,
+                                etag=current_etag
+                            )
+                    logger.debug(f"DB initialized for {owner}/{repo}. SHA: {current_last_sha[:7]}, ETag: {current_etag}")
+                
+                elif newly_found_commits:
+                    logger.info(f"Found {len(newly_found_commits)} new commit(s) for {owner}/{repo}. Old SHA: {current_last_sha[:7] if current_last_sha else 'None'}, Newest SHA from API: {latest_sha_on_github[:7]}.")
+                    if force_pushed_or_many:
+                         logger.warning(f"Previously known SHA {current_last_sha[:7] if current_last_sha else 'None'} not found in recent commits for {owner}/{repo}. "
+                                        f"Possible force push or >30 new commits. Reporting on {len(newly_found_commits)} fetched.")
 
-                                except RPCError as e:
-                                    logger.error(f"Failed to send notification message to chat {chat_id} for {owner}/{repo}: {e}. Monitoring continues.")
-                                except Exception as send_e:
-                                    logger.error(f"Unexpected error preparing/sending notification for {owner}/{repo}: {send_e}", exc_info=True)
+                    new_sha_to_store_in_db = newly_found_commits[0]['sha']
 
-                            else:
-                                logger.warning(f"Detected change for {owner}/{repo} but found no specific new commits. Updating ETag only.")
-                                if new_etag and new_etag != etag:
-                                    try:
-                                        async with async_session_maker() as session:
-                                            async with session.begin():
-                                                await db_ops.update_repo_fields(session, repo_db_id, etag=new_etag)
-                                            etag = new_etag
-                                            logger.debug(f"Updated ETag in DB for repo ID {repo_db_id} due to SHA mismatch with no new commits.")
-                                    except Exception as db_e:
-                                        logger.error(f"Failed to update ETag in DB for repo ID {repo_db_id}: {db_e}", exc_info=True)
-
-                        else:
-                            logger.debug(f"No new commits for {owner}/{repo} (SHA match: {last_commit_sha[:7]}).")
-                            if new_etag and new_etag != etag:
-                                logger.debug(f"ETag changed for {owner}/{repo} even though SHA matched. Updating ETag.")
-                                try:
-                                    async with async_session_maker() as session:
-                                        async with session.begin():
-                                            await db_ops.update_repo_fields(session, repo_db_id, etag=new_etag)
-                                        etag = new_etag
-                                except Exception as db_e:
-                                    logger.error(f"Failed to update ETag in DB for repo ID {repo_db_id}: {db_e}", exc_info=True)
-
-                        # Reset retries on successful check (304 or 200 OK processing)
-                        retries = 0
-
-            except aiohttp.ClientError as e:
-                retries += 1
-                logger.warning(f"Network error monitoring {owner}/{repo}: {e}. Retry {retries}/{max_retries}.")
-                if retries >= max_retries:
-                    logger.error(f"Max network retries ({max_retries}) exceeded for {owner}/{repo}. Stopping monitor.")
+                    previous_sha_for_notification = current_last_sha
+                    current_last_sha = new_sha_to_store_in_db
+                    current_etag = new_etag_from_response
                     try:
-                       await bot.send_message(chat_id, strings["monitor"]["network_error"].format(repo_url=escape(repo_url)))
+                        async with async_session_maker() as session:
+                            async with session.begin():
+                                await db_ops.update_repo_fields(
+                                    session, repo_db_id,
+                                    last_commit_sha=current_last_sha,
+                                    etag=current_etag
+                                )
+                        logger.debug(f"Updated DB for {owner}/{repo}. New SHA: {current_last_sha[:7]}, ETag: {current_etag}")
+                    except Exception as db_e:
+                        logger.error(f"Failed to update DB state for repo ID {repo_db_id} after new commits: {db_e}", exc_info=True)
+                        current_last_sha = previous_sha_for_notification 
+                        await asyncio.sleep(check_interval)
+                        continue
+
+                    # Prepare and Send Notification
+                    try:
+                        if len(newly_found_commits) == 1:
+                            message_text = format_single_commit_message(newly_found_commits[0], owner, repo, strings)
+                        else:
+                            message_text = format_multiple_commits_message(
+                                newly_found_commits, owner, repo, strings,
+                                previous_known_sha=previous_sha_for_notification,
+                                max_commits_to_list=MAX_COMMITS_TO_LIST_IN_NOTIFICATION
+                            )
+                        
+                        await bot.send_message(chat_id, message_text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
+                        logger.info(f"Sent notification for {len(newly_found_commits)} commit(s) to chat {chat_id} for {owner}/{repo}.")
+                    except RPCError as rpc_e:
+                        logger.error(f"Failed to send Telegram message for {owner}/{repo} to {chat_id}: {rpc_e}. Monitoring continues.")
+                    except Exception as send_e:
+                        logger.error(f"Unexpected error preparing/sending notification for {owner}/{repo}: {send_e}", exc_info=True)
+
+                elif latest_sha_on_github != current_last_sha:
+                    logger.warning(f"SHA mismatch for {owner}/{repo}. DB SHA: {current_last_sha[:7] if current_last_sha else 'None'}, Fetched SHA: {latest_sha_on_github[:7]}. "
+                                   f"No new commits in between found (force_pushed_or_many={force_pushed_or_many}). Updating to latest SHA.")
+                    current_last_sha = latest_sha_on_github
+                    current_etag = new_etag_from_response
+                    async with async_session_maker() as session:
+                        async with session.begin():
+                            await db_ops.update_repo_fields(
+                                session, repo_db_id,
+                                last_commit_sha=current_last_sha,
+                                etag=current_etag
+                            )
+                
+                else:
+                    logger.debug(f"No new commits for {owner}/{repo} (SHA match: {current_last_sha[:7]}).")
+                    if new_etag_from_response and new_etag_from_response != current_etag:
+                        logger.info(f"ETag changed for {owner}/{repo} despite SHA match. Old: {current_etag}, New: {new_etag_from_response}. Updating.")
+                        current_etag = new_etag_from_response
+                        async with async_session_maker() as session:
+                            async with session.begin():
+                                await db_ops.update_repo_fields(session, repo_db_id, etag=current_etag)
+                
+                retries = 0
+
+            except NotFoundError as e:
+                logger.error(f"Repository {owner}/{repo} not found (404): {e.message}. Stopping monitor.")
+                await bot.send_message(chat_id, strings["monitor"]["repo_not_found"].format(repo_url=escape(repo_url)))
+                return True
+            except UnauthorizedError as e:
+                logger.error(f"Unauthorized (401) for {owner}/{repo}: {e.message}. Check token. Stopping monitor.")
+                await bot.send_message(chat_id, strings["monitor"]["auth_error"].format(repo_url=escape(repo_url)))
+                return True
+            except ForbiddenError as e:
+                rate_limit_reset = e.headers.get('X-RateLimit-Reset', '')
+                reset_time_str = ""
+                if rate_limit_reset:
+                    try:
+                        reset_dt = datetime.datetime.fromtimestamp(int(rate_limit_reset), tz=datetime.timezone.utc)
+                        reset_time_str = f" (resets at {reset_dt.strftime('%Y-%m-%d %H:%M:%S %Z')})"
+                    except ValueError:
+                        pass
+                logger.warning(f"Forbidden/Rate Limit (403) for {owner}/{repo}{reset_time_str}: {e.message}.")
+                retries += 1
+                if retries >= max_retries:
+                    logger.error(f"Rate limit / Forbidden error persisted after {max_retries} retries for {owner}/{repo}. Stopping monitor.")
+                    await bot.send_message(chat_id, strings["monitor"]["rate_limit_error"].format(repo_url=escape(repo_url)))
+                    return True
+                
+                # Check for explicit retry-after header from GitHub
+                retry_after_seconds = e.headers.get('Retry-After')
+                wait_time = check_interval * (2 ** retries)
+                if retry_after_seconds:
+                    try:
+                        wait_time = max(wait_time, int(retry_after_seconds) + 5)
+                        logger.info(f"Using Retry-After header: {retry_after_seconds}s.")
+                    except ValueError:
+                        pass
+                
+                logger.info(f"Waiting {wait_time}s before next check for {owner}/{repo}")
+                await asyncio.sleep(wait_time)
+                continue
+            except (ClientRequestError, InvalidResponseError, aiohttp.ClientResponseError) as e:
+                logger.warning(f"API request error for {owner}/{repo}: {type(e).__name__} - {e.message if hasattr(e, 'message') else str(e)}. Retry {retries + 1}/{max_retries}.")
+                retries += 1
+                if retries >= max_retries:
+                    logger.error(f"Max retries ({max_retries}) exceeded for {owner}/{repo} due to {type(e).__name__}. Stopping monitor.")
+                    error_key = "invalid_data_error" if isinstance(e, InvalidResponseError) else "network_error"
+                    try:
+                        await bot.send_message(chat_id, strings["monitor"][error_key].format(repo_url=escape(repo_url)))
                     except Exception:
-                       logger.warning(f"Failed to send network error notification to chat {chat_id} for {owner}/{repo}")
+                        logger.warning(f"Failed to send {error_key} notification to chat {chat_id} for {owner}/{repo}")
                     return True
                 wait_time = check_interval * (2 ** (retries -1))
                 logger.info(f"Waiting {wait_time}s before next check for {owner}/{repo}")
                 await asyncio.sleep(wait_time)
                 continue
-
+            except APIError as e:
+                logger.error(f"Unhandled APIError for {owner}/{repo}: {e}. Stopping monitor.", exc_info=True)
+                await bot.send_message(chat_id, strings["monitor"]["internal_error"].format(repo_url=escape(repo_url)))
+                return True
             except Exception as e:
                 logger.error(f"Unexpected error in monitor loop for {owner}/{repo}: {e}", exc_info=True)
                 try:
-                   await bot.send_message(chat_id, strings["monitor"]["internal_error"].format(repo_url=escape(repo_url)))
+                    await bot.send_message(chat_id, strings["monitor"]["internal_error"].format(repo_url=escape(repo_url)))
                 except Exception:
-                   logger.warning(f"Failed to send internal error notification to chat {chat_id} for {owner}/{repo}")
+                    pass
                 return True
 
             await asyncio.sleep(check_interval)
@@ -307,7 +228,12 @@ async def monitor_repo(
         logger.info(f"Monitor task for {owner}/{repo} (ID: {repo_db_id}) cancelled.")
         return False
     except Exception as outer_e:
-         logger.critical(f"Critical unexpected error outside main loop for {owner}/{repo} (ID: {repo_db_id}): {outer_e}", exc_info=True)
-         return True
+        logger.critical(f"Critical unexpected error outside main loop for {owner}/{repo} (ID: {repo_db_id}): {outer_e}", exc_info=True)
+        try:
+            await bot.send_message(chat_id, f"A critical internal error occurred monitoring {escape(repo_url)}. The monitor has stopped.")
+        except Exception:
+            pass
+        return True
     finally:
-        logger.info(f"Monitor task for {owner}/{repo} (ID: {repo_db_id}) finished.")
+        await api_client.close()
+        logger.info(f"Monitor task for {owner}/{repo} (ID: {repo_db_id}) finished processing.")
