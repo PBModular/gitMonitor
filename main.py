@@ -167,14 +167,14 @@ class gitMonitorModule(BaseModule):
             return
 
         repo_url = message.command[1]
-        owner, repo = parse_github_url(repo_url)
-        if not owner or not repo:
+        owner, repo_name_parsed = parse_github_url(repo_url)
+        if not owner or not repo_name_parsed:
             await message.reply(self.S["add_repo"]["invalid_url"].format(repo_url=repo_url))
             return
 
         try:
             confirmation_message = await message.reply(
-                self.S["add_repo"]["starting"].format(owner=owner, repo=repo)
+                self.S["add_repo"]["starting"].format(owner=owner, repo=repo_name_parsed)
             )
         except RPCError as e:
             self.logger.error(f"[{chat_id}] Failed to send confirmation: {e}")
@@ -202,16 +202,17 @@ class gitMonitorModule(BaseModule):
                         check_interval=None,
                         last_commit_sha=None,
                         etag=None
+                        repo_name=repo_name_parsed,
                     )
                     session.add(new_repo_entry)
                     await session.flush()
                     repo_id = new_repo_entry.id
-                    self.logger.info(f"Added repo {owner}/{repo} (ID: {repo_id}) to DB for chat {chat_id}")
+                    self.logger.info(f"Added repo {owner}/{repo_name_parsed} (ID: {repo_id}) to DB for chat {chat_id}")
 
                 await session.commit()
                 await self._start_monitor_task(new_repo_entry)
 
-                success_text = self.S["add_repo"]["success"].format(owner=owner, repo=repo)
+                success_text = self.S["add_repo"]["success"].format(owner=owner, repo=repo_name_parsed)
                 if confirmation_message:
                     await confirmation_message.edit_text(success_text)
                 else:
@@ -220,7 +221,7 @@ class gitMonitorModule(BaseModule):
         except IntegrityError:
             await session.rollback()
             self.logger.warning(f"[{chat_id}] Integrity error likely due to race condition adding {repo_url}.")
-            error_text = self.S["add_repo"]["already_monitoring"].format(owner=owner, repo=repo)
+            error_text = self.S["add_repo"]["already_monitoring"].format(owner=owner, repo=repo_name_parsed)
             if confirmation_message: await confirmation_message.edit_text(error_text)
             else: await message.reply(error_text)
         except Exception as e:
@@ -295,7 +296,7 @@ class gitMonitorModule(BaseModule):
                     interval_str = f"{interval}s" if interval else f"Default ({self.default_check_interval}s)"
                     repos_list.append(f"• <code>{url}</code> ({interval_str})")
 
-            response_text = self.S["list_repos"]["header"] + "\n" + "\n".join(repos_list)
+            response_text = self.S["list_repos"]["header"] + "\n" + "\n".join(repos_list_text)
             await message.reply(response_text, disable_web_page_preview=True)
 
         except Exception as e:
