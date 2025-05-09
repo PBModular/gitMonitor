@@ -1,12 +1,12 @@
 import asyncio
 from pyrogram.types import Message
 from pyrogram.errors import RPCError
-from sqlalchemy import select, delete, update
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from base.module import BaseModule, command
 from .db import Base, MonitoredRepo
+from . import db_ops
 from .monitor import monitor_repo
 from .utils import parse_github_url
 from typing import Dict, Optional
@@ -42,8 +42,7 @@ class gitMonitorModule(BaseModule):
         restarted_count = 0
         try:
             async with self.async_session() as session:
-                result = await session.execute(select(MonitoredRepo))
-                repos_to_monitor = result.scalars().all()
+                repos_to_monitor = await db_ops.get_all_active_repos(session)
 
                 for repo_entry in repos_to_monitor:
                     self.logger.info(f"Restarting monitor for chat {repo_entry.chat_id} on repo {repo_entry.repo_url} (DB ID: {repo_entry.id})")
@@ -144,16 +143,15 @@ class gitMonitorModule(BaseModule):
         return False
 
     async def _remove_repo_from_db(self, chat_id: int, repo_id: int):
-        """Removes a specific monitored repo entry from the database."""
+        """Removes a specific monitored repo entry from the database using db_ops."""
         try:
             async with self.async_session() as session:
                 async with session.begin():
-                    await session.execute(
-                        delete(MonitoredRepo)
-                        .where(MonitoredRepo.chat_id == chat_id)
-                        .where(MonitoredRepo.id == repo_id)
-                    )
-                self.logger.info(f"Removed repo ID {repo_id} for chat {chat_id} from database.")
+                    deleted = await db_ops.delete_repo_entry(session, chat_id, repo_id)
+                if deleted:
+                    self.logger.info(f"Removed repo ID {repo_id} for chat {chat_id} from database.")
+                else:
+                    self.logger.warning(f"Attempted to remove repo ID {repo_id} for chat {chat_id}, but it was not found or not owned by chat.")
         except Exception as e:
             self.logger.error(f"Failed to remove repo ID {repo_id} for chat {chat_id} from DB: {e}", exc_info=True)
 
@@ -183,33 +181,23 @@ class gitMonitorModule(BaseModule):
         try:
             async with self.async_session() as session:
                 async with session.begin():
-                    existing = await session.execute(
-                        select(MonitoredRepo.id)
-                        .where(MonitoredRepo.chat_id == chat_id)
-                        .where(MonitoredRepo.repo_url == repo_url)
-                    )
-                    if existing.scalar_one_or_none() is not None:
-                        error_text = self.S["add_repo"]["already_monitoring"].format(owner=owner, repo=repo)
+                    existing_repo = await db_ops.get_repo_by_url(session, chat_id, repo_url)
+                    if existing_repo:
+                        error_text = self.S["add_repo"]["already_monitoring"].format(owner=owner, repo=repo_name_parsed)
                         if confirmation_message: await confirmation_message.edit_text(error_text)
                         else: await message.reply(error_text)
                         return
 
-                    new_repo_entry = MonitoredRepo(
+                    new_repo_entry = await db_ops.create_repo_entry(
+                        session,
                         chat_id=chat_id,
                         repo_url=repo_url,
                         owner=owner,
-                        repo=repo,
-                        check_interval=None,
-                        last_commit_sha=None,
-                        etag=None
-                        repo_name=repo_name_parsed,
+                        repo_name=repo_name_parsed
                     )
-                    session.add(new_repo_entry)
-                    await session.flush()
                     repo_id = new_repo_entry.id
                     self.logger.info(f"Added repo {owner}/{repo_name_parsed} (ID: {repo_id}) to DB for chat {chat_id}")
 
-                await session.commit()
                 await self._start_monitor_task(new_repo_entry)
 
                 success_text = self.S["add_repo"]["success"].format(owner=owner, repo=repo_name_parsed)
@@ -219,7 +207,6 @@ class gitMonitorModule(BaseModule):
                     await self.bot.send_message(chat_id, success_text)
 
         except IntegrityError:
-            await session.rollback()
             self.logger.warning(f"[{chat_id}] Integrity error likely due to race condition adding {repo_url}.")
             error_text = self.S["add_repo"]["already_monitoring"].format(owner=owner, repo=repo_name_parsed)
             if confirmation_message: await confirmation_message.edit_text(error_text)
@@ -244,31 +231,33 @@ class gitMonitorModule(BaseModule):
             return
 
         repo_url_to_remove = message.command[1].strip().rstrip('/')
+        repo_id_to_remove = None
+        owner_of_repo = None
+        name_of_repo = None
 
         try:
             async with self.async_session() as session:
-                result = await session.execute(
-                    select(MonitoredRepo.id, MonitoredRepo.owner, MonitoredRepo.repo)
-                    .where(MonitoredRepo.chat_id == chat_id)
-                    .where(MonitoredRepo.repo_url == repo_url_to_remove)
-                )
-                repo_data = result.first()
+                repo_to_remove = await db_ops.get_repo_by_url(session, chat_id, repo_url_to_remove)
 
-                if repo_data is None:
+                if repo_to_remove is None:
                     await message.reply(self.S["remove_repo"]["not_found"].format(repo_url=repo_url_to_remove))
                     return
 
-                repo_id, owner, repo = repo_data
+                repo_id_to_remove = repo_to_remove.id
+                owner_of_repo = repo_to_remove.owner
+                name_of_repo = repo_to_remove.repo
 
-                stopped = await self._stop_monitor_task(chat_id, repo_id)
-                if stopped:
-                    self.logger.info(f"Stopped monitor task for {owner}/{repo} (ID: {repo_id}) in chat {chat_id}.")
-                else:
-                    self.logger.warning(f"No active task found for {owner}/{repo} (ID: {repo_id}) in chat {chat_id}, but DB entry exists. Proceeding with DB removal.")
+            stopped = await self._stop_monitor_task(chat_id, repo_id_to_remove)
+            if stopped:
+                self.logger.info(f"Stopped monitor task for {owner_of_repo}/{name_of_repo} \
+                                 (ID: {repo_id_to_remove}) in chat {chat_id}.")
+            else:
+                self.logger.warning(f"No active task found for {owner_of_repo}/{name_of_repo} \
+                                    (ID: {repo_id_to_remove}) in chat {chat_id}, but DB entry might exist. Proceeding with DB removal.")
 
-                await self._remove_repo_from_db(chat_id, repo_id)
+            await self._remove_repo_from_db(chat_id, repo_id_to_remove)
 
-            await message.reply(self.S["remove_repo"]["success"].format(owner=owner, repo=repo))
+            await message.reply(self.S["remove_repo"]["success"].format(owner=owner_of_repo, repo=name_of_repo))
 
         except Exception as e:
             self.logger.error(f"[{chat_id}] Error removing repo {repo_url_to_remove}: {e}", exc_info=True)
@@ -278,23 +267,18 @@ class gitMonitorModule(BaseModule):
     async def list_repos_cmd(self, _, message: Message):
         """Lists the repositories currently being monitored in this chat."""
         chat_id = message.chat.id
-        repos_list = []
+        repos_list_text = []
         try:
             async with self.async_session() as session:
-                result = await session.execute(
-                    select(MonitoredRepo.repo_url, MonitoredRepo.check_interval)
-                    .where(MonitoredRepo.chat_id == chat_id)
-                    .order_by(MonitoredRepo.repo_url)
-                )
-                monitored_repos = result.all()
+                monitored_repos = await db_ops.get_repos_for_chat(session, chat_id)
 
                 if not monitored_repos:
                     await message.reply(self.S["list_repos"]["none"])
                     return
 
-                for url, interval in monitored_repos:
-                    interval_str = f"{interval}s" if interval else f"Default ({self.default_check_interval}s)"
-                    repos_list.append(f"• <code>{url}</code> ({interval_str})")
+                for repo_entry in monitored_repos:
+                    interval_str = f"{repo_entry.check_interval}s" if repo_entry.check_interval else f"Default ({self.default_check_interval}s)"
+                    repos_list_text.append(f"• <code>{repo_entry.repo_url}</code> ({interval_str})")
 
             response_text = self.S["list_repos"]["header"] + "\n" + "\n".join(repos_list_text)
             await message.reply(response_text, disable_web_page_preview=True)
@@ -318,45 +302,42 @@ class gitMonitorModule(BaseModule):
         try:
             seconds = int(interval_str)
             if seconds < self.min_interval:
-                await message.reply(self.S["git_interval"]["min_interval"])
+                await message.reply(self.S["git_interval"]["min_interval"].format(min_interval=self.min_interval))
                 return
         except ValueError:
             await message.reply(self.S["git_interval"]["invalid_interval"])
             return
 
+        repo_id = None
+        owner = None
+        repo_name = None
+
         try:
             async with self.async_session() as session:
                 async with session.begin():
-                    result = await session.execute(
-                        select(MonitoredRepo)
-                        .where(MonitoredRepo.chat_id == chat_id)
-                        .where(MonitoredRepo.repo_url == repo_url_to_update)
-                    )
-                    repo_entry = result.scalar_one_or_none()
+                    repo_entry = await db_ops.get_repo_by_url(session, chat_id, repo_url_to_update)
 
                     if repo_entry is None:
                         await message.reply(self.S["git_interval"]["not_found"].format(repo_url=repo_url_to_update))
                         return
 
-                    repo_entry.check_interval = seconds
-                    await session.flush()
-                    repo_id = repo_entry.id
-                    owner = repo_entry.owner
-                    repo = repo_entry.repo
+                    updated_repo_entry = await db_ops.set_repo_interval(session, repo_entry, seconds)
+                    
+                    repo_id = updated_repo_entry.id
+                    owner = updated_repo_entry.owner
+                    repo_name = updated_repo_entry.repo
 
-                    self.logger.info(f"Updating interval for repo {owner}/{repo} (ID: {repo_id}) in chat {chat_id} to {seconds}s.")
-
-                await session.commit()
+                    self.logger.info(f"Updating interval for repo {owner}/{repo_name} (ID: {repo_id}) in chat {chat_id} to {seconds}s.")
 
             stopped = await self._stop_monitor_task(chat_id, repo_id)
             if not stopped:
-                self.logger.warning(f"No active task found for repo ID {repo_id} ({owner}/{repo}) after interval update. Starting new task anyway.")
+                self.logger.warning(f"No active task found for repo ID {repo_id} ({owner}/{repo_name}) after interval update. Starting new task anyway.")
 
             async with self.async_session() as session:
-                updated_repo_entry = await session.get(MonitoredRepo, repo_id)
-                if updated_repo_entry:
-                    await self._start_monitor_task(updated_repo_entry)
-                    await message.reply(self.S["git_interval"]["success"].format(owner=owner, repo=repo, seconds=seconds))
+                final_repo_entry = await db_ops.get_repo_by_id(session, repo_id)
+                if final_repo_entry:
+                    await self._start_monitor_task(final_repo_entry)
+                    await message.reply(self.S["git_interval"]["success"].format(owner=owner, repo=repo_name, seconds=seconds))
                 else:
                     self.logger.error(f"Could not find repo entry {repo_id} after interval update commit. Cannot restart monitor.")
                     await message.reply(self.S["git_interval"]["error_restart"])
