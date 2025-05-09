@@ -2,10 +2,9 @@ import asyncio
 import aiohttp
 import logging
 from .utils import parse_github_url, get_merge_info
-from .db import MonitoredRepo
+from . import db_ops
 from pyrogram.errors import RPCError
 from pyrogram.enums import ParseMode
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from html import escape
 import datetime
@@ -121,10 +120,11 @@ async def monitor_repo(
                             try:
                                 async with async_session_maker() as session:
                                     async with session.begin():
-                                        await session.execute(
-                                            update(MonitoredRepo)
-                                            .where(MonitoredRepo.id == repo_db_id)
-                                            .values(last_commit_sha=last_commit_sha, etag=etag)
+                                        await db_ops.update_repo_fields(
+                                            session,
+                                            repo_db_id,
+                                            last_commit_sha=last_commit_sha,
+                                            etag=etag
                                         )
                                     logger.debug(f"DB initialized for {owner}/{repo} (ID: {repo_db_id}). SHA: {last_commit_sha[:7]}, ETag: {etag}")
                             except Exception as db_e:
@@ -141,20 +141,21 @@ async def monitor_repo(
 
                             if not found_last_sha:
                                 logger.warning(f"Previously known SHA {last_commit_sha[:7]} not found in recent commits for {owner}/{repo}. \
-                                               Possible force push or very large number of commits. Reporting only the latest {len(new_commits_data)} fetched.")
+                                               Possible force push or very large number of commits. Reporting only the latest {len(new_commits_data)} fetched (up to 30).")
 
                             if new_commits_data:
                                 logger.info(f"Found {len(new_commits_data)} new commit(s) for {owner}/{repo}.")
-                                new_last_sha = new_commits_data[0]['sha']
+                                new_last_sha_to_store = new_commits_data[0]['sha']
                                 try:
                                     async with async_session_maker() as session:
                                         async with session.begin():
-                                            await session.execute(
-                                                update(MonitoredRepo)
-                                                .where(MonitoredRepo.id == repo_db_id)
-                                                .values(last_commit_sha=new_last_sha, etag=new_etag)
+                                            await db_ops.update_repo_fields(
+                                                session,
+                                                repo_db_id,
+                                                last_commit_sha=new_last_sha_to_store,
+                                                etag=new_etag
                                             )
-                                        last_commit_sha = new_last_sha
+                                        last_commit_sha = new_last_sha_to_store
                                         etag = new_etag
                                         logger.debug(f"Updated DB for {owner}/{repo} (ID: {repo_db_id}). New SHA: {last_commit_sha[:7]}, ETag: {etag}")
                                 except Exception as db_e:
@@ -221,55 +222,60 @@ async def monitor_repo(
                                                 )
                                             )
 
-                                        latest_commit = new_commits_data[0]
-                                        latest_sha_short = latest_commit['sha'][:7]
-                                        latest_commit_url = escape(latest_commit.get("html_url", "#"))
+                                        latest_commit_notif = new_commits_data[0]
+                                        latest_sha_short_notif = latest_commit_notif['sha'][:7]
+                                        latest_commit_url_notif = escape(latest_commit_notif.get("html_url", "#"))
 
                                         more_link = ""
                                         if count > MAX_COMMITS_TO_LIST:
-                                            oldest_sha = new_commits_data[-1]['sha'][:7]
-                                            newest_sha = new_commits_data[0]['sha']
-                                            compare_url = escape(f"https://github.com/{owner}/{repo}/compare/{oldest_sha}...{newest_sha}")
+                                            compare_url_base = last_commit_sha
+                                            compare_url_head = new_commits_data[0]['sha']
+                                            compare_url = escape(f"https://github.com/{owner}/{repo}/compare/{compare_url_base}...{compare_url_head}")
                                             more_link = strings["monitor"]["more"].format(compare_url=compare_url)
+
 
                                         text = strings["monitor"]["multiple_new_commits"].format(
                                             count=count,
                                             owner=escape(owner),
                                             repo=escape(repo),
                                             commit_list="\n".join(commit_list_lines),
-                                            latest_sha=latest_sha_short,
-                                            latest_commit_url=latest_commit_url
+                                            latest_sha=latest_sha_short_notif,
+                                            latest_commit_url=latest_commit_url_notif
                                         ) + more_link
 
                                     await bot.send_message(chat_id, text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
                                     logger.info(f"Sent notification for {len(new_commits_data)} commit(s) to chat {chat_id} for {owner}/{repo}.")
 
                                 except RPCError as e:
-                                    logger.error(f"Failed to send notification message to chat {chat_id} for {owner}/{repo}: {e}. Monitoring continues, but state is updated.")
+                                    logger.error(f"Failed to send notification message to chat {chat_id} for {owner}/{repo}: {e}. Monitoring continues.")
                                 except Exception as send_e:
                                     logger.error(f"Unexpected error preparing/sending notification for {owner}/{repo}: {send_e}", exc_info=True)
 
                             else:
                                 logger.warning(f"Detected change for {owner}/{repo} but found no specific new commits. Updating ETag only.")
-                                etag = new_etag
+                                if new_etag and new_etag != etag:
+                                    try:
+                                        async with async_session_maker() as session:
+                                            async with session.begin():
+                                                await db_ops.update_repo_fields(session, repo_db_id, etag=new_etag)
+                                            etag = new_etag
+                                            logger.debug(f"Updated ETag in DB for repo ID {repo_db_id} due to SHA mismatch with no new commits.")
+                                    except Exception as db_e:
+                                        logger.error(f"Failed to update ETag in DB for repo ID {repo_db_id}: {db_e}", exc_info=True)
 
                         else:
                             logger.debug(f"No new commits for {owner}/{repo} (SHA match: {last_commit_sha[:7]}).")
                             if new_etag and new_etag != etag:
                                 logger.debug(f"ETag changed for {owner}/{repo} even though SHA matched. Updating ETag.")
-                                etag = new_etag
                                 try:
                                     async with async_session_maker() as session:
                                         async with session.begin():
-                                            await session.execute(
-                                                update(MonitoredRepo)
-                                                .where(MonitoredRepo.id == repo_db_id)
-                                                .values(etag=etag)
-                                            )
+                                            await db_ops.update_repo_fields(session, repo_db_id, etag=new_etag)
+                                        etag = new_etag
                                 except Exception as db_e:
-                                     logger.error(f"Failed to update ETag in DB for repo ID {repo_db_id}: {db_e}", exc_info=True)
+                                    logger.error(f"Failed to update ETag in DB for repo ID {repo_db_id}: {db_e}", exc_info=True)
 
-                        # Reset retries on successful check (304 or 200 OK)
+                        # Reset retries on successful check (304 or 200 OK processing)
                         retries = 0
 
             except aiohttp.ClientError as e:
