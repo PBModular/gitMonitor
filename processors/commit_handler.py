@@ -28,6 +28,7 @@ async def handle_commit_checks(
 
     Returns:
         The new last_sha and new_commit_etag to be used for the next cycle.
+
     Raises:
         APIError exceptions if GitHub API calls fail critically (e.g. 404, 401, 403 after retries)
         which should be caught by the main monitor loop.
@@ -41,7 +42,7 @@ async def handle_commit_checks(
     if api_response.status_code == 304: # Not Modified
         logger.debug(f"Commits: No new data for {owner}/{repo} (304 Not Modified). ETag: {api_response.etag}")
         if api_response.etag and api_response.etag != current_commit_etag:
-            logger.info(f"Commits: ETag changed on 304 for {owner}/{repo}. Old: {current_commit_etag}, New: {api_response.etag}. Updating.")
+            logger.info(f"Commits: ETag changed on 304 for {owner}/{repo}. Old: {current_commit_etag[:7]}, New: {api_response.etag[:7]}. Updating.")
             next_commit_etag = api_response.etag
             async with async_session_maker() as session:
                 async with session.begin():
@@ -104,7 +105,7 @@ async def handle_commit_checks(
 
     # Handle ETag update for 200 OK responses
     if new_etag_from_response and new_etag_from_response != current_commit_etag:
-        logger.info(f"Commits: ETag changed on 200 OK for {owner}/{repo}. Old: {current_commit_etag}, New: {new_etag_from_response}. Updating.")
+        logger.info(f"Commits: ETag changed on 200 OK for {owner}/{repo}. Old: {current_commit_etag[:7]}, New: {new_etag_from_response[:7]}. Updating.")
         next_commit_etag = new_etag_from_response
         db_updates["commit_etag"] = next_commit_etag
     
