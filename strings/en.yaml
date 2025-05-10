@@ -42,7 +42,7 @@ monitor:
 
     {commit_list}
   commit_line: "• <a href=\"{url}\">{sha}</a>: {message}{merge_indicator} (<i>{author}</i>)"
-  more: "\n🔗<a href=\"{compare_url}\">More...</a>"
+  more_commits: "\n🔗<a href=\"{compare_url}\">View comparison...</a>"
 
   new_issue: |
     ⚠️ New issue in <b>{owner}/{repo}</b>
@@ -54,6 +54,15 @@ monitor:
 
     {issue_list}
   issue_line: "• <a href=\"{url}\">#{number}</a>: {title} (<i>by {author}</i>)"
+  more_issues: "\n🔗<a href=\"{issues_url}\">View all issues...</a>"
+
+  issue_closed: |
+    ✅ Issue closed in <b>{owner}/{repo}</b>{reason_display}
+    👤 <b>Closed by:</b> {closed_by_user}
+    📄 <i>{title}</i>
+    🔗 <a href="{issue_url}">#{number}</a>
+  issue_reason_completed: " (Completed)"
+  issue_reason_not_planned: " (Not Planned)"
 
   repo_not_found: "❌ Repository not found: <code>{repo_url}</code>\nMonitoring stopped for this repository. Please check the URL or remove it using /git_remove."
   auth_error: "❌ Authentication error accessing <code>{repo_url}</code>.\nPlease check the bot's GitHub token. Monitoring stopped for this repository."

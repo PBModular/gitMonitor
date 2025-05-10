@@ -20,8 +20,8 @@ class gitMonitorModule(BaseModule):
         self.default_check_interval = self.module_config.get("default_check_interval", 60)
         self.max_retries = self.module_config.get("max_retries", 5)
         self.min_interval = 10
-        self.max_commits_in_notification = self.module_config.get("max_commits_to_list", 4)
-        self.max_issues_in_notification = self.module_config.get("max_issues_to_list", 4)
+        self.max_commits_in_notification = self.module_config.get("max_commits_to_list_in_notification", 4)
+        self.max_issues_in_notification = self.module_config.get("max_issues_to_list_in_notification", 4)
 
         if not self.github_token:
             self.logger.warning("Valid GitHub API token not found in config. Rate limits will be lower.")
@@ -126,7 +126,9 @@ class gitMonitorModule(BaseModule):
                 max_retries=self.max_retries,
                 github_token=self.github_token,
                 strings=self.S,
-                async_session_maker=self.async_session
+                async_session_maker=self.async_session,
+                max_commits_to_list_in_notification=self.max_commits_in_notification,
+                max_issues_to_list_in_notification=self.max_issues_in_notification
             )
             if should_stop_permanently:
                 self.logger.info(f"Monitor for repo ID {repo_id} ({repo_url}) requested permanent stop. Removing DB entry.")

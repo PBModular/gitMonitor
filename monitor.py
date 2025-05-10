@@ -13,7 +13,7 @@ from .api.github_api import (
 )
 from .db import MonitoredRepo
 from .processors.commit_handler import handle_commit_checks
-from .processors.issue_handler import handle_issue_checks
+from .processors.issue_handler import handle_issue_monitoring_cycle
 
 
 async def monitor_repo(
@@ -24,7 +24,9 @@ async def monitor_repo(
     max_retries: int,
     github_token: str | None,
     strings: dict,
-    async_session_maker: async_sessionmaker[AsyncSession]
+    async_session_maker: async_sessionmaker[AsyncSession],
+    max_commits_to_list_in_notification: int,
+    max_issues_to_list_in_notification: int
 ):
     """
     Monitors a single GitHub repository.
@@ -49,21 +51,23 @@ async def monitor_repo(
     current_commit_etag = repo_entry.commit_etag
     current_last_issue_number = repo_entry.last_known_issue_number
     current_issue_etag = repo_entry.issue_etag
-
-    # Get monitoring flags from repo_entry
-    monitor_commits_enabled = repo_entry.monitor_commits
-    monitor_issues_enabled = repo_entry.monitor_issues
+    current_last_closed_ts = repo_entry.last_closed_issue_update_ts
+    current_closed_issue_etag = repo_entry.closed_issue_etag
 
     retries = 0
 
     logger.info(f"Starting monitor for {owner}/{repo} (ID: {repo_db_id}). Interval: {check_interval}s. "
                 f"Initial SHA: {current_last_sha[:7] if current_last_sha else 'None'}, "
-                f"Initial Issue No: {current_last_issue_number if current_last_issue_number else 'None'}. "
-                f"Commits: {'Enabled' if monitor_commits_enabled else 'Disabled'}, "
-                f"Issues: {'Enabled' if monitor_issues_enabled else 'Disabled'}")
+                f"Initial Issue No: {current_last_issue_number if current_last_issue_number else 'None'}, "
+                f"Initial Closed TS: {current_last_closed_ts if current_last_closed_ts else 'None'}. "
+                f"Commits: {'Enabled' if repo_entry.monitor_commits else 'Disabled'}, "
+                f"Issues: {'Enabled' if repo_entry.monitor_issues else 'Disabled'}")
 
     try:
         while True:
+            monitor_commits_enabled = repo_entry.monitor_commits
+            monitor_issues_enabled = repo_entry.monitor_issues
+
             try:
                 if monitor_commits_enabled:
                     logger.debug(f"Checking commits for {owner}/{repo}...")
@@ -71,7 +75,8 @@ async def monitor_repo(
                         api_client=api_client, owner=owner, repo=repo, repo_url=repo_url, repo_db_id=repo_db_id,
                         current_last_sha=current_last_sha, current_commit_etag=current_commit_etag,
                         async_session_maker=async_session_maker, logger=logger, strings=strings,
-                        chat_id=chat_id, bot=bot
+                        chat_id=chat_id, bot=bot,
+                        max_commits_to_list_in_notification=max_commits_to_list_in_notification
                     )
                     current_last_sha = next_sha
                     current_commit_etag = next_commit_etag
@@ -84,23 +89,35 @@ async def monitor_repo(
                     current_commit_etag = None
 
                 if monitor_issues_enabled:
-                    logger.debug(f"Checking issues for {owner}/{repo}...")
-                    next_issue_num, next_issue_etag = await handle_issue_checks(
-                        api_client=api_client, owner=owner, repo=repo, repo_url=repo_url, repo_db_id=repo_db_id,
-                        current_last_issue_number=current_last_issue_number, current_issue_etag=current_issue_etag,
-                        async_session_maker=async_session_maker, logger=logger, strings=strings,
-                        chat_id=chat_id, bot=bot
-                    )
+                    logger.debug(f"Checking issues (open & closed) for {owner}/{repo}...")
+                    next_issue_num, next_issue_etag, next_closed_ts, next_closed_etag = \
+                        await handle_issue_monitoring_cycle(
+                            api_client=api_client, owner=owner, repo=repo, repo_url=repo_url, repo_db_id=repo_db_id,
+                            current_last_issue_number=current_last_issue_number, current_issue_etag=current_issue_etag,
+                            current_last_closed_ts=current_last_closed_ts, current_closed_etag=current_closed_issue_etag,
+                            async_session_maker=async_session_maker, logger=logger, strings=strings,
+                            chat_id=chat_id, bot=bot,
+                            max_issues_to_list_in_notification=max_issues_to_list_in_notification
+                        )
                     current_last_issue_number = next_issue_num
                     current_issue_etag = next_issue_etag
-                elif not monitor_issues_enabled and current_issue_etag:
-                    logger.debug(f"Issue monitoring disabled for {owner}/{repo}, clearing etag if set.")
-                    async with async_session_maker() as session:
-                        async with session.begin():
-                            from . import db_ops
-                            await db_ops.update_repo_fields(session, repo_db_id, issue_etag=None)
-                    current_issue_etag = None
-
+                    current_last_closed_ts = next_closed_ts
+                    current_closed_issue_etag = next_closed_etag
+                elif not monitor_issues_enabled:
+                    db_updates_for_disabled_issues = {}
+                    if current_issue_etag:
+                        db_updates_for_disabled_issues["issue_etag"] = None
+                        current_issue_etag = None
+                    if current_closed_issue_etag:
+                        db_updates_for_disabled_issues["closed_issue_etag"] = None
+                        current_closed_issue_etag = None
+                    if db_updates_for_disabled_issues:
+                        logger.debug(f"Issue monitoring disabled for {owner}/{repo}, clearing etags if set.")
+                        async with async_session_maker() as session:
+                            async with session.begin():
+                                from . import db_ops
+                                await db_ops.update_repo_fields(session, repo_db_id, **db_updates_for_disabled_issues)
+                
                 retries = 0
 
             except NotFoundError as e:
@@ -128,18 +145,19 @@ async def monitor_repo(
                     return True
                 
                 # Check for explicit retry-after header from GitHub
-                retry_after_seconds = e.headers.get('Retry-After')
+                retry_after_seconds_str = e.headers.get('Retry-After')
                 wait_time = check_interval * (2 ** retries)
-                if retry_after_seconds:
+                if retry_after_seconds_str:
                     try:
-                        wait_time = max(wait_time, int(retry_after_seconds) + 5)
+                        retry_after_seconds = int(retry_after_seconds_str)
+                        wait_time = max(wait_time, retry_after_seconds + 5) 
                         logger.info(f"Using Retry-After header: {retry_after_seconds}s. Effective wait: {wait_time}s")
                     except ValueError: pass
 
                 logger.info(f"Waiting {wait_time}s before next check for {owner}/{repo} (Retry {retries}/{max_retries})")
                 await asyncio.sleep(wait_time)
                 continue
-            except (ClientRequestError, InvalidResponseError, aiohttp.ClientResponseError) as e:
+            except (ClientRequestError, InvalidResponseError, aiohttp.ClientResponseError, aiohttp.ServerTimeoutError) as e:
                 logger.warning(f"API request or response error for {owner}/{repo}: {type(e).__name__} - {str(e)}. Retry {retries + 1}/{max_retries}.")
                 retries += 1
                 if retries >= max_retries:

@@ -20,7 +20,8 @@ async def handle_commit_checks(
     logger: logging.Logger,
     strings: Dict[str, Any],
     chat_id: int,
-    bot
+    bot,
+    max_commits_to_list_in_notification: int
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Handles one cycle of checking for new commits.
@@ -55,70 +56,62 @@ async def handle_commit_checks(
     # Successful response (200 OK)
     github_commits_data = api_response.data
     new_etag_from_response = api_response.etag
+    db_updates = {}
 
     if not github_commits_data or not isinstance(github_commits_data, list) or not github_commits_data[0].get("sha"):
         logger.warning(f"Commits: Invalid or empty commit data from GitHub API for {owner}/{repo} despite 200 OK. Skipping this check.")
         if new_etag_from_response and new_etag_from_response != current_commit_etag:
-            old_etag_display = current_commit_etag[:7] if current_commit_etag else "None"
-            new_etag_display = new_etag_from_response[:7]
-            logger.info(f"Commits: ETag changed on (faulty) 200 OK for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
-            next_commit_etag = new_etag_from_response
-            async with async_session_maker() as session:
-                async with session.begin():
-                    await db_ops.update_repo_fields(session, repo_db_id, commit_etag=next_commit_etag)
-        return current_last_sha, next_commit_etag
-
-    newly_found_commits, latest_sha_on_github, is_initial, force_pushed_or_many = \
-        identify_new_commits(github_commits_data, current_last_sha)
-
-    db_updates = {}
-
-    if is_initial:
-        logger.info(f"Commits: Initial run for {owner}/{repo}.")
-        next_last_sha = latest_sha_on_github
-        db_updates["last_commit_sha"] = next_last_sha
-    
-    elif newly_found_commits:
-        logger.info(f"Commits: Found {len(newly_found_commits)} new commit(s) for {owner}/{repo}. Old SHA: {current_last_sha[:7] if current_last_sha else 'None'}, Newest SHA from API: {latest_sha_on_github[:7] if latest_sha_on_github else 'None'}.")
-        if force_pushed_or_many:
-                logger.warning(f"Commits: Previously known SHA {current_last_sha[:7] if current_last_sha else 'None'} not found in recent commits for {owner}/{repo}. "
-                                f"Possible force push or >30 new commits. Reporting on {len(newly_found_commits)} fetched.")
-
-        new_sha_to_store_in_db = newly_found_commits[0]['sha']
-        next_last_sha = new_sha_to_store_in_db
-        db_updates["last_commit_sha"] = next_last_sha
-        
-        # Prepare and Send Notification
-        try:
-            if len(newly_found_commits) == 1:
-                message_text = format_single_commit_message(newly_found_commits[0], owner, repo, strings)
-            else:
-                message_text = format_multiple_commits_message(
-                    newly_found_commits, owner, repo, strings,
-                    previous_known_sha=current_last_sha
-                )
-            
-            await bot.send_message(chat_id, message_text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
-            logger.info(f"Commits: Sent notification for {len(newly_found_commits)} commit(s) to chat {chat_id} for {owner}/{repo}.")
-        except RPCError as rpc_e:
-            logger.error(f"Commits: Failed to send Telegram message for {owner}/{repo} to {chat_id}: {rpc_e}. Monitoring continues.")
-        except Exception as send_e:
-            logger.error(f"Commits: Unexpected error preparing/sending notification for {owner}/{repo}: {send_e}", exc_info=True)
-
-    elif latest_sha_on_github != current_last_sha:
-        logger.warning(f"Commits: SHA mismatch for {owner}/{repo}. DB SHA: {current_last_sha[:7] if current_last_sha else 'None'}, Fetched SHA: {latest_sha_on_github[:7] if latest_sha_on_github else 'None'}. "
-                        f"No new commits in between found (force_pushed_or_many={force_pushed_or_many}). Updating to latest SHA from API.")
-        next_last_sha = latest_sha_on_github
-        db_updates["last_commit_sha"] = next_last_sha
-    
+            logger.info(f"Commits: ETag changed on (faulty) 200 OK for {owner}/{repo}. Updating.")
+            db_updates["commit_etag"] = new_etag_from_response
     else:
-        logger.debug(f"Commits: No new commits for {owner}/{repo} (SHA match: {current_last_sha[:7] if current_last_sha else 'None'}).")
+        newly_found_commits, latest_sha_on_github, is_initial, force_pushed_or_many = \
+            identify_new_commits(github_commits_data, current_last_sha)
+
+        if is_initial:
+            logger.info(f"Commits: Initial run for {owner}/{repo}. Latest SHA from API: {latest_sha_on_github[:7] if latest_sha_on_github else 'None'}")
+            if latest_sha_on_github:
+                next_last_sha = latest_sha_on_github
+                db_updates["last_commit_sha"] = next_last_sha
+        
+        elif newly_found_commits:
+            logger.info(f"Commits: Found {len(newly_found_commits)} new commit(s) for {owner}/{repo}.")
+            if force_pushed_or_many:
+                    logger.warning(f"Commits: Previously known SHA {current_last_sha[:7] if current_last_sha else 'None'} not found in recent commits for {owner}/{repo}. "
+                                    f"Possible force push or >30 new commits. Reporting on {len(newly_found_commits)} fetched.")
+
+            new_sha_to_store_in_db = newly_found_commits[0]['sha']
+            next_last_sha = new_sha_to_store_in_db
+            db_updates["last_commit_sha"] = next_last_sha
+            
+            try:
+                if len(newly_found_commits) == 1:
+                    message_text = format_single_commit_message(newly_found_commits[0], owner, repo, strings)
+                else:
+                    message_text = format_multiple_commits_message(
+                        newly_found_commits, owner, repo, strings,
+                        previous_known_sha=current_last_sha,
+                        max_to_list=max_commits_to_list_in_notification
+                    )
+                
+                await bot.send_message(chat_id, message_text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
+                logger.info(f"Commits: Sent notification for {len(newly_found_commits)} commit(s) to chat {chat_id} for {owner}/{repo}.")
+            except RPCError as rpc_e:
+                logger.error(f"Commits: Failed to send Telegram message for {owner}/{repo} to {chat_id}: {rpc_e}. Monitoring continues.")
+            except Exception as send_e:
+                logger.error(f"Commits: Unexpected error preparing/sending notification for {owner}/{repo}: {send_e}", exc_info=True)
+
+        elif latest_sha_on_github and latest_sha_on_github != current_last_sha:
+            logger.warning(f"Commits: SHA mismatch for {owner}/{repo}. DB SHA: {current_last_sha[:7] if current_last_sha else 'None'}, Fetched SHA: {latest_sha_on_github[:7]}. "
+                            f"No new commits in between found (force_pushed_or_many={force_pushed_or_many}). Updating to latest SHA from API.")
+            next_last_sha = latest_sha_on_github
+            db_updates["last_commit_sha"] = next_last_sha
+        
+        else:
+            logger.debug(f"Commits: No new commits for {owner}/{repo} (SHA match: {current_last_sha[:7] if current_last_sha else 'None'}).")
 
     # Handle ETag update for 200 OK responses
     if new_etag_from_response and new_etag_from_response != current_commit_etag:
-        old_etag_display = current_commit_etag[:7] if current_commit_etag else "None"
-        new_etag_display = new_etag_from_response[:7]
-        logger.info(f"Commits: ETag changed on 200 OK for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
+        logger.info(f"Commits: ETag changed on 200 OK for {owner}/{repo}. Updating.")
         next_commit_etag = new_etag_from_response
         db_updates["commit_etag"] = next_commit_etag
     

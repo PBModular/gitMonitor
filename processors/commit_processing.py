@@ -2,8 +2,6 @@ from html import escape
 from typing import List, Optional, Tuple, Dict, Any
 from ..utils import get_merge_info
 
-MAX_COMMITS_TO_LIST_IN_NOTIFICATION = 4
-
 def identify_new_commits(
     api_data: List[Dict[str, Any]],
     known_last_sha: Optional[str]
@@ -80,13 +78,14 @@ def format_multiple_commits_message(
     owner: str, 
     repo: str, 
     strings: Dict,
-    previous_known_sha: Optional[str]
+    previous_known_sha: Optional[str],
+    max_to_list: int
 ) -> str:
     """Formats a notification message for multiple new commits."""
     count = len(new_commits_data_newest_first)
     commit_list_lines = []
     
-    commits_to_display_in_list = new_commits_data_newest_first[:MAX_COMMITS_TO_LIST_IN_NOTIFICATION]
+    commits_to_display_in_list = new_commits_data_newest_first[:max_to_list]
     
     for commit in reversed(commits_to_display_in_list):
         merge_info = get_merge_info(commit)
@@ -119,25 +118,26 @@ def format_multiple_commits_message(
     latest_sha_short_notif = latest_commit_overall['sha'][:7]
     latest_commit_url_notif = escape(latest_commit_overall.get("html_url", "#"))
 
-    more_link = ""
-    if count > MAX_COMMITS_TO_LIST_IN_NOTIFICATION:
+    more_link_text = ""
+    if count > max_to_list:
         compare_url_base = previous_known_sha
         compare_url_head = new_commits_data_newest_first[0]['sha']
 
-        if not compare_url_base and len(new_commits_data_newest_first) > 1:
+        if not compare_url_base and len(new_commits_data_newest_first) > 1: 
             compare_url_base = new_commits_data_newest_first[-1]['sha']
 
 
         if compare_url_base and compare_url_base != compare_url_head:
             compare_url = escape(f"https://github.com/{owner}/{repo}/compare/{compare_url_base}...{compare_url_head}")
-            more_link = strings["monitor"]["more_commits"].format(compare_url=compare_url)
+            more_link_text = strings["monitor"]["more_commits"].format(compare_url=compare_url)
 
     text = strings["monitor"]["multiple_new_commits"].format(
         count=count,
         owner=escape(owner),
         repo=escape(repo),
         commit_list="\n".join(commit_list_lines),
-        latest_sha=latest_sha_short_notif,
-        latest_commit_url=latest_commit_url_notif
-    ) + more_link
+        latest_sha=latest_sha_short_notif
+    )
+    if more_link_text:
+        text += more_link_text
     return text
