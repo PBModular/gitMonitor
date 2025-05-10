@@ -40,10 +40,13 @@ async def handle_issue_checks(
     next_issue_etag = current_issue_etag
 
     if api_response.status_code == 304: # Not Modified
-        logger.debug(f"Issues: No new data for {owner}/{repo} (304 Not Modified). ETag: {api_response.etag}")
-        if api_response.etag and api_response.etag != current_issue_etag:
-            logger.info(f"Issues: ETag changed on 304 for {owner}/{repo}. Old: {current_issue_etag[:7]}, New: {api_response.etag[:7]}. Updating.")
-            next_issue_etag = api_response.etag
+        etag_from_304 = api_response.etag
+        logger.debug(f"Issues: No new data for {owner}/{repo} (304 Not Modified). ETag: {etag_from_304[:7] if etag_from_304 else 'None'}")
+        if etag_from_304 and etag_from_304 != current_issue_etag:
+            old_etag_display = current_issue_etag[:7] if current_issue_etag else "None"
+            new_etag_display = etag_from_304[:7]
+            logger.info(f"Issues: ETag changed on 304 for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
+            next_issue_etag = etag_from_304
             async with async_session_maker() as session:
                 async with session.begin():
                     await db_ops.update_repo_fields(session, repo_db_id, issue_etag=next_issue_etag)
@@ -55,17 +58,27 @@ async def handle_issue_checks(
 
     if not isinstance(github_issues_data, list):
         logger.warning(f"Issues: Invalid (non-list) issue data from GitHub API for {owner}/{repo} despite 200 OK. Skipping this check.")
-        return current_last_issue_number, current_issue_etag
-
-    if not github_issues_data:
-        logger.debug(f"Issues: Received empty list for {owner}/{repo}, no new issues.")
         if new_etag_from_response and new_etag_from_response != current_issue_etag:
-            logger.info(f"Issues: ETag changed on 200 OK (empty list) for {owner}/{repo}. Old: {current_issue_etag[:7]}, New: {new_etag_from_response[:7]}. Updating.")
+            old_etag_display = current_issue_etag[:7] if current_issue_etag else "None"
+            new_etag_display = new_etag_from_response[:7]
+            logger.info(f"Issues: ETag changed on (faulty non-list) 200 OK for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
             next_issue_etag = new_etag_from_response
             async with async_session_maker() as session:
                 async with session.begin():
                     await db_ops.update_repo_fields(session, repo_db_id, issue_etag=next_issue_etag)
         return current_last_issue_number, next_issue_etag
+
+    if not github_issues_data:
+        logger.debug(f"Issues: Received empty list for {owner}/{repo}, no new issues based on current criteria.")
+        if new_etag_from_response and new_etag_from_response != current_issue_etag:
+            old_etag_display = current_issue_etag[:7] if current_issue_etag else "None"
+            new_etag_display = new_etag_from_response[:7]
+            logger.info(f"Issues: ETag changed on 200 OK (empty list) for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
+            next_issue_etag = new_etag_from_response
+            async with async_session_maker() as session:
+                async with session.begin():
+                    await db_ops.update_repo_fields(session, repo_db_id, issue_etag=next_issue_etag)
+        return next_last_issue_number, next_issue_etag
 
 
     newly_found_issues, latest_issue_number_on_github, is_initial = \
@@ -74,12 +87,12 @@ async def handle_issue_checks(
     db_updates = {}
 
     if is_initial:
-        logger.info(f"Issues: Initial run for {owner}/{repo}. Setting last issue number to {latest_issue_number_on_github}.")
+        logger.info(f"Issues: Initial run for {owner}/{repo}.")
         next_last_issue_number = latest_issue_number_on_github
         db_updates["last_known_issue_number"] = next_last_issue_number
     
     elif newly_found_issues:
-        logger.info(f"Issues: Found {len(newly_found_issues)} new issue(s) for {owner}/{repo}. Old Number: {current_last_issue_number[:7]}, Newest Number from API: {latest_issue_number_on_github[:7]}.")
+        logger.info(f"Issues: Found {len(newly_found_issues)} new issue(s) for {owner}/{repo}. Old Number: {current_last_issue_number}, Newest Number from API: {latest_issue_number_on_github}.")
         
         # The first issue in newly_found_issues is the newest one.
         new_issue_number_to_store_in_db = newly_found_issues[0]['number']
@@ -102,18 +115,21 @@ async def handle_issue_checks(
         except Exception as send_e:
             logger.error(f"Issues: Unexpected error preparing/sending issue notification for {owner}/{repo}: {send_e}", exc_info=True)
 
-    elif latest_issue_number_on_github != current_last_issue_number : 
-        if latest_issue_number_on_github is not None:
-             logger.info(f"Issues: No new issues reported by identify_new_issues, but latest API issue number {latest_issue_number_on_github} "
-                        f"differs from known {current_last_issue_number}. Updating known number.")
-             next_last_issue_number = latest_issue_number_on_github
-             db_updates["last_known_issue_number"] = next_last_issue_number
-    
+    elif latest_issue_number_on_github is not None and latest_issue_number_on_github != current_last_issue_number : 
+        if latest_issue_number_on_github > (current_last_issue_number or 0):
+            logger.info(f"Issues: No new issues reported, but latest API issue number {latest_issue_number_on_github} "
+                    f"is greater than known {current_last_issue_number}. Updating known number.")
+            next_last_issue_number = latest_issue_number_on_github
+            db_updates["last_known_issue_number"] = next_last_issue_number
+        else:
+            logger.debug(f"Issues: Latest API issue {latest_issue_number_on_github} is not newer than known {current_last_issue_number}. No update needed.")
     else:
-        logger.debug(f"Issues: No new issues for {owner}/{repo} (Number match: {current_last_issue_number}).")
+        logger.debug(f"Issues: No new issues for {owner}/{repo} (Number match or latest not newer: {current_last_issue_number}).")
 
     if new_etag_from_response and new_etag_from_response != current_issue_etag:
-        logger.info(f"Issues: ETag changed on 200 OK for {owner}/{repo}. Old: {current_issue_etag[:7]}, New: {new_etag_from_response[:7]}. Updating.")
+        old_etag_display = current_issue_etag[:7] if current_issue_etag else "None"
+        new_etag_display = new_etag_from_response[:7]
+        logger.info(f"Issues: ETag changed on 200 OK for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
         next_issue_etag = new_etag_from_response
         db_updates["issue_etag"] = next_issue_etag
     

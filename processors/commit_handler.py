@@ -40,10 +40,13 @@ async def handle_commit_checks(
     next_commit_etag = current_commit_etag
 
     if api_response.status_code == 304: # Not Modified
-        logger.debug(f"Commits: No new data for {owner}/{repo} (304 Not Modified). ETag: {api_response.etag}")
-        if api_response.etag and api_response.etag != current_commit_etag:
-            logger.info(f"Commits: ETag changed on 304 for {owner}/{repo}. Old: {current_commit_etag[:7]}, New: {api_response.etag[:7]}. Updating.")
-            next_commit_etag = api_response.etag
+        etag_from_304 = api_response.etag
+        logger.debug(f"Commits: No new data for {owner}/{repo} (304 Not Modified). ETag: {etag_from_304[:7] if etag_from_304 else 'None'}")
+        if etag_from_304 and etag_from_304 != current_commit_etag:
+            old_etag_display = current_commit_etag[:7] if current_commit_etag else "None"
+            new_etag_display = etag_from_304[:7]
+            logger.info(f"Commits: ETag changed on 304 for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
+            next_commit_etag = etag_from_304
             async with async_session_maker() as session:
                 async with session.begin():
                     await db_ops.update_repo_fields(session, repo_db_id, commit_etag=next_commit_etag)
@@ -55,7 +58,15 @@ async def handle_commit_checks(
 
     if not github_commits_data or not isinstance(github_commits_data, list) or not github_commits_data[0].get("sha"):
         logger.warning(f"Commits: Invalid or empty commit data from GitHub API for {owner}/{repo} despite 200 OK. Skipping this check.")
-        return current_last_sha, current_commit_etag # Or update etag if it changed on this faulty 200
+        if new_etag_from_response and new_etag_from_response != current_commit_etag:
+            old_etag_display = current_commit_etag[:7] if current_commit_etag else "None"
+            new_etag_display = new_etag_from_response[:7]
+            logger.info(f"Commits: ETag changed on (faulty) 200 OK for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
+            next_commit_etag = new_etag_from_response
+            async with async_session_maker() as session:
+                async with session.begin():
+                    await db_ops.update_repo_fields(session, repo_db_id, commit_etag=next_commit_etag)
+        return current_last_sha, next_commit_etag
 
     newly_found_commits, latest_sha_on_github, is_initial, force_pushed_or_many = \
         identify_new_commits(github_commits_data, current_last_sha)
@@ -63,7 +74,7 @@ async def handle_commit_checks(
     db_updates = {}
 
     if is_initial:
-        logger.info(f"Commits: Initial run for {owner}/{repo}. Setting last commit to {latest_sha_on_github[:7] if latest_sha_on_github else 'None'}.")
+        logger.info(f"Commits: Initial run for {owner}/{repo}.")
         next_last_sha = latest_sha_on_github
         db_updates["last_commit_sha"] = next_last_sha
     
@@ -105,7 +116,9 @@ async def handle_commit_checks(
 
     # Handle ETag update for 200 OK responses
     if new_etag_from_response and new_etag_from_response != current_commit_etag:
-        logger.info(f"Commits: ETag changed on 200 OK for {owner}/{repo}. Old: {current_commit_etag[:7]}, New: {new_etag_from_response[:7]}. Updating.")
+        old_etag_display = current_commit_etag[:7] if current_commit_etag else "None"
+        new_etag_display = new_etag_from_response[:7]
+        logger.info(f"Commits: ETag changed on 200 OK for {owner}/{repo}. Old: {old_etag_display}, New: {new_etag_display}. Updating.")
         next_commit_etag = new_etag_from_response
         db_updates["commit_etag"] = next_commit_etag
     
