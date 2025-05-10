@@ -25,7 +25,9 @@ async def create_repo_entry(
     repo_name: str,
     check_interval: Optional[int] = None,
     last_commit_sha: Optional[str] = None,
-    etag: Optional[str] = None
+    commit_etag: Optional[str] = None,
+    last_known_issue_number: Optional[int] = None,
+    issue_etag: Optional[str] = None
 ) -> MonitoredRepo:
     """Creates and adds a new MonitoredRepo entry to the session, then flushes."""
     new_repo_entry = MonitoredRepo(
@@ -35,10 +37,13 @@ async def create_repo_entry(
         repo=repo_name,
         check_interval=check_interval,
         last_commit_sha=last_commit_sha,
-        etag=etag
+        commit_etag=commit_etag,
+        last_known_issue_number=last_known_issue_number,
+        issue_etag=issue_etag
     )
     session.add(new_repo_entry)
     await session.flush()
+    await session.refresh(new_repo_entry)
     return new_repo_entry
 
 async def delete_repo_entry(session: AsyncSession, chat_id: int, repo_id: int) -> bool:
@@ -68,6 +73,7 @@ async def set_repo_interval(
     """Updates the check_interval for a given MonitoredRepo entry and flushes."""
     repo_entry.check_interval = new_interval
     await session.flush()
+    await session.refresh(repo_entry)
     return repo_entry
 
 async def get_all_active_repos(session: AsyncSession) -> List[MonitoredRepo]:
@@ -84,10 +90,16 @@ async def update_repo_fields(session: AsyncSession, repo_db_id: int, **fields_to
     if not fields_to_update:
         return True
 
+    valid_columns = MonitoredRepo.__table__.columns.keys()
+    filtered_updates = {k: v for k, v in fields_to_update.items() if k in valid_columns}
+
+    if not filtered_updates:
+        return False
+
     stmt = (
         update(MonitoredRepo)
         .where(MonitoredRepo.id == repo_db_id)
-        .values(**fields_to_update)
+        .values(**filtered_updates)
     )
     result = await session.execute(stmt)
     return result.rowcount > 0

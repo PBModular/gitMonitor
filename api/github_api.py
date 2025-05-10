@@ -1,7 +1,7 @@
 import aiohttp
 import asyncio
 import logging
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Literal
 
 class APIError(Exception):
     """Base class for API errors."""
@@ -89,4 +89,23 @@ class GitHubAPIClient:
             headers["If-None-Match"] = etag
         return await self._request("GET", url, params=params, request_specific_headers=headers)
 
-    #TODO: issues
+    async def fetch_issues(
+        self,
+        owner: str,
+        repo: str,
+        etag: Optional[str] = None,
+        per_page: int = 30,
+        sort: Literal["created", "updated", "comments"] = "created",
+        direction: Literal["asc", "desc"] = "desc",
+        state: Literal["open", "closed", "all"] = "open",
+        since: Optional[str] = None
+    ) -> GitHubAPIResponse:
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/issues"
+        params = {"per_page": per_page, "sort": sort, "direction": direction, "state": state}
+        if since:
+            params["since"] = since
+            
+        headers = {}
+        if etag:
+            headers["If-None-Match"] = etag
+        return await self._request("GET", url, params=params, request_specific_headers=headers)

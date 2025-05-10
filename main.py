@@ -13,11 +13,14 @@ from typing import Dict, Optional
 
 class gitMonitorModule(BaseModule):
     def on_init(self):
-        self.monitor_tasks: Dict[int, Dict[int, asyncio.Task]] = {}
+        self.monitor_tasks: Dict[int, Dict[int, asyncio.Task]] = {} # chat_id -> repo_id -> Task
         self.github_token = self.module_config.get("api_token")
         self.default_check_interval = self.module_config.get("default_check_interval", 60)
         self.max_retries = self.module_config.get("max_retries", 5)
         self.min_interval = 10
+        self.max_commits_in_notification = self.module_config.get("max_commits_to_list", 4)
+        self.max_issues_in_notification = self.module_config.get("max_issues_to_list", 4)
+
         if not self.github_token:
             self.logger.warning("Valid GitHub API token not found in config. Rate limits will be lower.")
         self._async_session_maker: Optional[sessionmaker[AsyncSession]] = None
@@ -75,6 +78,7 @@ class gitMonitorModule(BaseModule):
         chat_id = repo_entry.chat_id
         repo_id = repo_entry.id
         check_interval = repo_entry.check_interval or self.default_check_interval
+        check_interval = max(check_interval, self.min_interval)
 
         if chat_id not in self.monitor_tasks:
             self.monitor_tasks[chat_id] = {}
@@ -84,6 +88,12 @@ class gitMonitorModule(BaseModule):
             if existing_task and not existing_task.done():
                 self.logger.warning(f"Found existing task for repo ID {repo_id} in chat {chat_id}. Cancelling it before starting new one.")
                 existing_task.cancel()
+                try:
+                    await existing_task
+                except asyncio.CancelledError:
+                    self.logger.info(f"Existing task for repo ID {repo_id} properly cancelled.")
+                except Exception as e:
+                    self.logger.error(f"Error awaiting existing task cancellation for {repo_id}: {e}")
 
         task = asyncio.create_task(
             self._monitor_wrapper(
@@ -92,58 +102,73 @@ class gitMonitorModule(BaseModule):
             )
         )
         self.monitor_tasks[chat_id][repo_id] = task
-        self.logger.info(f"Created monitor task for chat {chat_id}, repo ID {repo_id} ({repo_entry.owner}/{repo_entry.repo})")
+        self.logger.info(f"Created monitor task for chat {chat_id}, repo ID {repo_id} ({repo_entry.owner}/{repo_entry.repo}), interval {check_interval}s")
 
     async def _monitor_wrapper(self, repo_entry: MonitoredRepo, check_interval: int):
-        """Wraps monitor_repo to handle task completion and cleanup."""
+        """Wraps monitor_repo to handle task completion, cleanup, and DB removal on permanent stop."""
         chat_id = repo_entry.chat_id
         repo_id = repo_entry.id
         repo_url = repo_entry.repo_url
+        should_stop_permanently = False
         try:
             should_stop_permanently = await monitor_repo(
                 bot=self.bot,
                 chat_id=chat_id,
-                repo_db_id=repo_id,
-                repo_url=repo_url,
+                repo_entry=repo_entry,
                 check_interval=check_interval,
                 max_retries=self.max_retries,
                 github_token=self.github_token,
                 strings=self.S,
-                initial_last_sha=repo_entry.last_commit_sha,
-                initial_etag=repo_entry.etag,
                 async_session_maker=self.async_session
             )
             if should_stop_permanently:
                 self.logger.info(f"Monitor for repo ID {repo_id} ({repo_url}) requested permanent stop. Removing DB entry.")
-                await self._remove_repo_from_db(chat_id, repo_id)
+                await self._remove_repo_from_db_and_task(chat_id, repo_id, task_already_stopped=True)
 
         except asyncio.CancelledError:
             self.logger.info(f"Monitor wrapper for repo ID {repo_id} ({repo_url}) was cancelled.")
         except Exception as e:
             self.logger.error(f"Unexpected error in monitor wrapper for repo ID {repo_id} ({repo_url}): {e}", exc_info=True)
-            await self._remove_repo_from_db(chat_id, repo_id)
+            should_stop_permanently = True 
+            await self._remove_repo_from_db_and_task(chat_id, repo_id, task_already_stopped=True)
         finally:
+            if not should_stop_permanently:
+                if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
+                    del self.monitor_tasks[chat_id][repo_id]
+                    if not self.monitor_tasks[chat_id]:
+                        del self.monitor_tasks[chat_id]
+                    self.logger.debug(f"Removed task entry for repo ID {repo_id} from chat {chat_id} in wrapper's finally block.")
+
+    async def _stop_monitor_task(self, chat_id: int, repo_id: int) -> bool:
+        """Stops a specific monitor task. Does NOT remove from DB."""
+        if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
+            task = self.monitor_tasks[chat_id].pop(repo_id)
+            if not self.monitor_tasks[chat_id]:
+                del self.monitor_tasks[chat_id]
+            
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    self.logger.info(f"Monitor task for chat {chat_id}, repo ID {repo_id} successfully cancelled.")
+                except Exception as e:
+                    self.logger.error(f"Error awaiting task cancellation for repo ID {repo_id}: {e}")
+            else:
+                self.logger.info(f"Monitor task for chat {chat_id}, repo ID {repo_id} was already done.")
+            return True
+        return False
+
+    async def _remove_repo_from_db_and_task(self, chat_id: int, repo_id: int, task_already_stopped: bool = False):
+        """Stops task (if not already) and removes repo from DB."""
+        if not task_already_stopped:
+            await self._stop_monitor_task(chat_id, repo_id)
+        else:
             if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
                 del self.monitor_tasks[chat_id][repo_id]
                 if not self.monitor_tasks[chat_id]:
                     del self.monitor_tasks[chat_id]
-                self.logger.debug(f"Removed task entry for repo ID {repo_id} from chat {chat_id}")
 
-
-    async def _stop_monitor_task(self, chat_id: int, repo_id: int):
-        """Stops a specific monitor task."""
-        if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
-            task = self.monitor_tasks[chat_id].pop(repo_id)
-            if not task.done():
-                task.cancel()
-            if not self.monitor_tasks[chat_id]:
-                del self.monitor_tasks[chat_id]
-            self.logger.info(f"Cancelled and removed monitor task for chat {chat_id}, repo ID {repo_id}")
-            return True
-        return False
-
-    async def _remove_repo_from_db(self, chat_id: int, repo_id: int):
-        """Removes a specific monitored repo entry from the database using db_ops."""
         try:
             async with self.async_session() as session:
                 async with session.begin():
@@ -151,7 +176,7 @@ class gitMonitorModule(BaseModule):
                 if deleted:
                     self.logger.info(f"Removed repo ID {repo_id} for chat {chat_id} from database.")
                 else:
-                    self.logger.warning(f"Attempted to remove repo ID {repo_id} for chat {chat_id}, but it was not found or not owned by chat.")
+                    self.logger.warning(f"Attempted to remove repo ID {repo_id} (chat {chat_id}) from DB, but it was not found or not owned by chat.")
         except Exception as e:
             self.logger.error(f"Failed to remove repo ID {repo_id} for chat {chat_id} from DB: {e}", exc_info=True)
 
@@ -164,19 +189,20 @@ class gitMonitorModule(BaseModule):
             await message.reply(self.S["add_repo"]["usage"])
             return
 
-        repo_url = message.command[1]
+        repo_url = message.command[1].strip().rstrip('/')
         owner, repo_name_parsed = parse_github_url(repo_url)
         if not owner or not repo_name_parsed:
             await message.reply(self.S["add_repo"]["invalid_url"].format(repo_url=repo_url))
             return
 
+        confirmation_msg = None
         try:
-            confirmation_message = await message.reply(
+            confirmation_msg = await message.reply(
                 self.S["add_repo"]["starting"].format(owner=owner, repo=repo_name_parsed)
             )
         except RPCError as e:
-            self.logger.error(f"[{chat_id}] Failed to send confirmation: {e}")
-            confirmation_message = None
+            self.logger.error(f"[{chat_id}] Failed to send 'starting' message for {repo_url}: {e}")
+
 
         try:
             async with self.async_session() as session:
@@ -184,7 +210,7 @@ class gitMonitorModule(BaseModule):
                     existing_repo = await db_ops.get_repo_by_url(session, chat_id, repo_url)
                     if existing_repo:
                         error_text = self.S["add_repo"]["already_monitoring"].format(owner=owner, repo=repo_name_parsed)
-                        if confirmation_message: await confirmation_message.edit_text(error_text)
+                        if confirmation_msg: await confirmation_msg.edit_text(error_text)
                         else: await message.reply(error_text)
                         return
 
@@ -193,32 +219,28 @@ class gitMonitorModule(BaseModule):
                         chat_id=chat_id,
                         repo_url=repo_url,
                         owner=owner,
-                        repo_name=repo_name_parsed
+                        repo_name=repo_name_parsed,
                     )
-                    repo_id = new_repo_entry.id
-                    self.logger.info(f"Added repo {owner}/{repo_name_parsed} (ID: {repo_id}) to DB for chat {chat_id}")
-
+                
+                self.logger.info(f"Added repo {owner}/{repo_name_parsed} (ID: {new_repo_entry.id}) to DB for chat {chat_id}")
                 await self._start_monitor_task(new_repo_entry)
 
                 success_text = self.S["add_repo"]["success"].format(owner=owner, repo=repo_name_parsed)
-                if confirmation_message:
-                    await confirmation_message.edit_text(success_text)
-                else:
-                    await self.bot.send_message(chat_id, success_text)
+                if confirmation_msg: await confirmation_msg.edit_text(success_text)
+                else: await self.bot.send_message(chat_id, success_text)
 
         except IntegrityError:
-            self.logger.warning(f"[{chat_id}] Integrity error likely due to race condition adding {repo_url}.")
+            self.logger.warning(f"[{chat_id}] Integrity error (likely race condition) adding {repo_url}.")
             error_text = self.S["add_repo"]["already_monitoring"].format(owner=owner, repo=repo_name_parsed)
-            if confirmation_message: await confirmation_message.edit_text(error_text)
+            if confirmation_msg: await confirmation_msg.edit_text(error_text)
             else: await message.reply(error_text)
         except Exception as e:
             self.logger.error(f"[{chat_id}] Error adding repo {repo_url}: {e}", exc_info=True)
             error_text = self.S["add_repo"]["error_generic"]
-            if confirmation_message:
-                try: await confirmation_message.edit_text(error_text)
+            if confirmation_msg:
+                try: await confirmation_msg.edit_text(error_text)
                 except RPCError: pass
-            else:
-                await message.reply(error_text)
+            else: await message.reply(error_text)
 
     @command("git_remove")
     async def remove_repo_cmd(self, _, message: Message):
@@ -226,14 +248,14 @@ class gitMonitorModule(BaseModule):
         chat_id = message.chat.id
 
         if len(message.command) < 2:
-            await message.reply(self.S["remove_repo"]["usage"])
-            await message.reply(self.S["remove_repo"]["usage_hint"])
+            await message.reply(self.S["remove_repo"]["usage"] + "\n" + self.S["remove_repo"]["usage_hint"])
             return
 
         repo_url_to_remove = message.command[1].strip().rstrip('/')
-        repo_id_to_remove = None
-        owner_of_repo = None
-        name_of_repo = None
+        
+        repo_id_to_remove: Optional[int] = None
+        owner_of_repo: Optional[str] = None
+        name_of_repo: Optional[str] = None
 
         try:
             async with self.async_session() as session:
@@ -242,20 +264,12 @@ class gitMonitorModule(BaseModule):
                 if repo_to_remove is None:
                     await message.reply(self.S["remove_repo"]["not_found"].format(repo_url=repo_url_to_remove))
                     return
-
+                
                 repo_id_to_remove = repo_to_remove.id
                 owner_of_repo = repo_to_remove.owner
                 name_of_repo = repo_to_remove.repo
 
-            stopped = await self._stop_monitor_task(chat_id, repo_id_to_remove)
-            if stopped:
-                self.logger.info(f"Stopped monitor task for {owner_of_repo}/{name_of_repo} \
-                                 (ID: {repo_id_to_remove}) in chat {chat_id}.")
-            else:
-                self.logger.warning(f"No active task found for {owner_of_repo}/{name_of_repo} \
-                                    (ID: {repo_id_to_remove}) in chat {chat_id}, but DB entry might exist. Proceeding with DB removal.")
-
-            await self._remove_repo_from_db(chat_id, repo_id_to_remove)
+            await self._remove_repo_from_db_and_task(chat_id, repo_id_to_remove)
 
             await message.reply(self.S["remove_repo"]["success"].format(owner=owner_of_repo, repo=name_of_repo))
 
@@ -277,9 +291,11 @@ class gitMonitorModule(BaseModule):
                     return
 
                 for repo_entry in monitored_repos:
-                    interval_str = f"{repo_entry.check_interval}s" if repo_entry.check_interval else f"Default ({self.default_check_interval}s)"
+                    interval_val = repo_entry.check_interval or self.default_check_interval
+                    interval_str = f"{interval_val}s"
+                    # TODO: Add indicators for what's being monitored (commits, issues) if flags are added to DB
                     repos_list_text.append(f"• <code>{repo_entry.repo_url}</code> ({interval_str})")
-
+            
             response_text = self.S["list_repos"]["header"] + "\n" + "\n".join(repos_list_text)
             await message.reply(response_text, disable_web_page_preview=True)
 
@@ -292,8 +308,7 @@ class gitMonitorModule(BaseModule):
         """Sets the update interval for a specific monitored repository."""
         chat_id = message.chat.id
         if len(message.command) < 3:
-            await message.reply(self.S["git_interval"]["usage"])
-            await message.reply(self.S["git_interval"]["usage_hint"])
+            await message.reply(self.S["git_interval"]["usage"] + "\n" + self.S["git_interval"]["usage_hint"])
             return
 
         repo_url_to_update = message.command[1].strip().rstrip('/')
@@ -308,9 +323,9 @@ class gitMonitorModule(BaseModule):
             await message.reply(self.S["git_interval"]["invalid_interval"])
             return
 
-        repo_id = None
-        owner = None
-        repo_name = None
+        repo_id_for_restart: Optional[int] = None
+        owner_for_reply: Optional[str] = None
+        repo_name_for_reply: Optional[str] = None
 
         try:
             async with self.async_session() as session:
@@ -323,24 +338,24 @@ class gitMonitorModule(BaseModule):
 
                     updated_repo_entry = await db_ops.set_repo_interval(session, repo_entry, seconds)
                     
-                    repo_id = updated_repo_entry.id
-                    owner = updated_repo_entry.owner
-                    repo_name = updated_repo_entry.repo
-
-                    self.logger.info(f"Updating interval for repo {owner}/{repo_name} (ID: {repo_id}) in chat {chat_id} to {seconds}s.")
-
-            stopped = await self._stop_monitor_task(chat_id, repo_id)
-            if not stopped:
-                self.logger.warning(f"No active task found for repo ID {repo_id} ({owner}/{repo_name}) after interval update. Starting new task anyway.")
+                    repo_id_for_restart = updated_repo_entry.id
+                    owner_for_reply = updated_repo_entry.owner
+                    repo_name_for_reply = updated_repo_entry.repo
+            
+            self.logger.info(f"Interval updated for repo {owner_for_reply}/{repo_name_for_reply} (ID: {repo_id_for_restart}) "
+                             f"in chat {chat_id} to {seconds}s. Restarting monitor task.")
 
             async with self.async_session() as session:
-                final_repo_entry = await db_ops.get_repo_by_id(session, repo_id)
-                if final_repo_entry:
-                    await self._start_monitor_task(final_repo_entry)
-                    await message.reply(self.S["git_interval"]["success"].format(owner=owner, repo=repo_name, seconds=seconds))
-                else:
-                    self.logger.error(f"Could not find repo entry {repo_id} after interval update commit. Cannot restart monitor.")
-                    await message.reply(self.S["git_interval"]["error_restart"])
+                final_repo_entry_for_restart = await db_ops.get_repo_by_id(session, repo_id_for_restart)
+            
+            if final_repo_entry_for_restart:
+                await self._start_monitor_task(final_repo_entry_for_restart)
+                await message.reply(self.S["git_interval"]["success"].format(
+                    owner=owner_for_reply, repo=repo_name_for_reply, seconds=seconds)
+                )
+            else:
+                self.logger.error(f"Could not find repo entry {repo_id_for_restart} after interval update commit. Cannot restart monitor.")
+                await message.reply(self.S["git_interval"]["error_restart"])
 
         except Exception as e:
             self.logger.error(f"[{chat_id}] Error setting interval for {repo_url_to_update}: {e}", exc_info=True)

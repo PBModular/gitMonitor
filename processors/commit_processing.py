@@ -1,6 +1,8 @@
 from html import escape
 from typing import List, Optional, Tuple, Dict, Any
-from .utils import get_merge_info
+from ..utils import get_merge_info
+
+MAX_COMMITS_TO_LIST_IN_NOTIFICATION = 4
 
 def identify_new_commits(
     api_data: List[Dict[str, Any]],
@@ -78,14 +80,13 @@ def format_multiple_commits_message(
     owner: str, 
     repo: str, 
     strings: Dict,
-    previous_known_sha: Optional[str],
-    max_commits_to_list: int
+    previous_known_sha: Optional[str]
 ) -> str:
     """Formats a notification message for multiple new commits."""
     count = len(new_commits_data_newest_first)
     commit_list_lines = []
     
-    commits_to_display_in_list = new_commits_data_newest_first[:max_commits_to_list]
+    commits_to_display_in_list = new_commits_data_newest_first[:MAX_COMMITS_TO_LIST_IN_NOTIFICATION]
     
     for commit in reversed(commits_to_display_in_list):
         merge_info = get_merge_info(commit)
@@ -114,12 +115,12 @@ def format_multiple_commits_message(
             )
         )
 
-    # latest_commit_overall = new_commits_data_newest_first[0]
-    # latest_sha_short_notif = latest_commit_overall['sha'][:7]
-    # latest_commit_url_notif = escape(latest_commit_overall.get("html_url", "#"))
+    latest_commit_overall = new_commits_data_newest_first[0]
+    latest_sha_short_notif = latest_commit_overall['sha'][:7]
+    latest_commit_url_notif = escape(latest_commit_overall.get("html_url", "#"))
 
     more_link = ""
-    if count > max_commits_to_list:
+    if count > MAX_COMMITS_TO_LIST_IN_NOTIFICATION:
         compare_url_base = previous_known_sha
         compare_url_head = new_commits_data_newest_first[0]['sha']
 
