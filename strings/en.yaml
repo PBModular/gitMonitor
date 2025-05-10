@@ -4,9 +4,10 @@ help: |
 
   <b>Commands:</b>
   <code>/git_add <repo_url></code> - Start monitoring a new GitHub repository (e.g., <code>https://github.com/owner/repo</code>).
-  <code>/git_remove <repo_url></code> - Stop monitoring the specified repository.
+  <code>/git_remove <github_repo_url>/<repo_id></code> - Stop monitoring the specified repository. You can get ID from /git_list.
   <code>/git_list</code> - List all repositories currently being monitored.
-  <code>/git_interval <repo_url> <seconds></code> - Set a custom check interval for a specific repository. Minimum interval is {min_interval} seconds.
+  <code>/git_interval <github_repo_url>/<repo_id> <seconds></code> - Set a custom check interval for a specific repository. Minimum interval is {min_interval} seconds.
+  <code>/git_settings [github_repo_url>/<repo_id]</code> - Configure monitoring options (commits/issues). If no argument, shows a list.
 add_repo:
   usage: "Usage: /git_add <github_repo_url>"
   invalid_url: "❌ Invalid GitHub URL provided: <code>{repo_url}</code>\nPlease use the format: https://github.com/owner/repository"
@@ -15,15 +16,21 @@ add_repo:
   error_generic: "❌ An error occurred while adding the repository monitor. Please try again later."
   already_monitoring: "ℹ️ Repository <b>{owner}/{repo}</b> is already being monitored."
 remove_repo:
-  usage: "Usage: /git_remove <github_repo_url>"
-  usage_hint: "ℹ️ Use /git_list to see the URLs of repositories currently being monitored."
+  usage: "Usage: /git_remove <github_repo_url>/<repo_id>"
+  usage_hint: "ℹ️ Use /git_list to see the URLs and IDs of repositories currently being monitored."
   not_found: "ℹ️ Repository <code>{repo_url}</code> is not currently being monitored."
+  not_found_id_url: "ℹ️ Repository with identifier '<code>{identifier}</code>' not found in your monitored list for this chat."
   success: "✅ Stopped monitoring repository <b>{owner}/{repo}</b>."
   error: "❌ An error occurred while removing the repository monitor."
 list_repos:
   header: "ℹ️ Currently monitored repositories:"
   none: "ℹ️ No GitHub repositories are currently being monitored."
   error: "❌ An error occurred while fetching the list of monitored repositories."
+  repo_line_format: "• ID: {id} <code>{repo_url}</code> ({interval_str}) C:{commit_status} I:{issue_status}"
+  commit_status_enabled: "✓"
+  commit_status_disabled: "✗"
+  issue_status_enabled: "✓"
+  issue_status_disabled: "✗"
 monitor:
   new_commit: |
     📦 New commit in <b>{owner}/{repo}</b>
@@ -55,11 +62,31 @@ monitor:
   rate_limit_error: "❌ GitHub rate limit or access issue persisted for <code>{repo_url}</code>.\nMonitoring stopped for this repository. Check token or wait."
   invalid_data_error: "❌ Received unexpected data from GitHub API for <code>{repo_url}</code> after multiple retries.\nMonitoring stopped for this repository."
 git_interval:
-  usage: "Usage: /git_interval <repo_url> <seconds>"
-  usage_hint: "ℹ️ Use /git_list to see the URLs of repositories currently being monitored."
+  usage: "Usage: /git_interval <github_repo_url>/<repo_id> <seconds>"
+  usage_hint: "ℹ️ Use /git_list to see the URLs and IDs of repositories currently being monitored."
   min_interval: "ℹ️ Interval must be at least {min_interval} seconds."
   invalid_interval: "❌ Invalid interval. Please provide a whole number of seconds (e.g., 60)."
   not_found: "ℹ️ Repository <code>{repo_url}</code> is not currently being monitored."
+  not_found_id_url: "ℹ️ Repository with identifier '<code>{identifier}</code>' not found in your monitored list for this chat."
   success: "✅ Check interval for <b>{owner}/{repo}</b> set to {seconds} seconds. Monitor restarted."
   error_generic: "❌ An error occurred while setting the interval."
   error_restart: "❌ Interval updated in database, but failed to restart the monitor task. Please try removing and re-adding the repository if issues persist."
+git_settings:
+  usage: "Usage: /git_settings [repo_id_or_url]"
+  usage_hint: "ℹ️ Use /git_list to see repository IDs and URLs. If no argument, a list will be shown."
+  select_repo_header: "⚙️ Select a repository to configure:"
+  repo_not_found: "❌ Repository with identifier '<code>{identifier}</code>' not found in your monitored list for this chat."
+  repo_not_found_generic: "❌ Repository not found or not owned by this chat."
+  header: "⚙️ Settings for <b>{owner}/{repo}</b> (ID: {repo_id}):"
+  commits_monitoring: "Commits Monitoring: {status}"
+  issues_monitoring: "Issues Monitoring: {status}"
+  status_enabled: "✅ Enabled"
+  status_disabled: "❌ Disabled"
+  toggle_commits_btn: "Toggle Commits"
+  toggle_issues_btn: "Toggle Issues"
+  back_to_list_btn: "🔙 Back to List"
+  prev_btn: "◀️ Prev"
+  next_btn: "Next ▶️"
+  close_btn: "✖️ Close"
+  updated_ok: "✅ Settings updated for {owner}/{repo}."
+  error: "❌ An error occurred while updating settings."

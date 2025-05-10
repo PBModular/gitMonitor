@@ -50,15 +50,17 @@ async def monitor_repo(
     current_last_issue_number = repo_entry.last_known_issue_number
     current_issue_etag = repo_entry.issue_etag
 
-    # TODO: Make these flags configurable per repo in DB
-    monitor_commits_enabled = True 
-    monitor_issues_enabled = True
+    # Get monitoring flags from repo_entry
+    monitor_commits_enabled = repo_entry.monitor_commits
+    monitor_issues_enabled = repo_entry.monitor_issues
 
     retries = 0
 
     logger.info(f"Starting monitor for {owner}/{repo} (ID: {repo_db_id}). Interval: {check_interval}s. "
                 f"Initial SHA: {current_last_sha[:7] if current_last_sha else 'None'}, "
-                f"Initial Issue No: {current_last_issue_number if current_last_issue_number else 'None'}")
+                f"Initial Issue No: {current_last_issue_number if current_last_issue_number else 'None'}. "
+                f"Commits: {'Enabled' if monitor_commits_enabled else 'Disabled'}, "
+                f"Issues: {'Enabled' if monitor_issues_enabled else 'Disabled'}")
 
     try:
         while True:
@@ -73,7 +75,14 @@ async def monitor_repo(
                     )
                     current_last_sha = next_sha
                     current_commit_etag = next_commit_etag
-                
+                elif not monitor_commits_enabled and current_commit_etag:
+                    logger.debug(f"Commit monitoring disabled for {owner}/{repo}, clearing etag if set.")
+                    async with async_session_maker() as session:
+                        async with session.begin():
+                            from . import db_ops
+                            await db_ops.update_repo_fields(session, repo_db_id, commit_etag=None)
+                    current_commit_etag = None
+
                 if monitor_issues_enabled:
                     logger.debug(f"Checking issues for {owner}/{repo}...")
                     next_issue_num, next_issue_etag = await handle_issue_checks(
@@ -84,6 +93,13 @@ async def monitor_repo(
                     )
                     current_last_issue_number = next_issue_num
                     current_issue_etag = next_issue_etag
+                elif not monitor_issues_enabled and current_issue_etag:
+                    logger.debug(f"Issue monitoring disabled for {owner}/{repo}, clearing etag if set.")
+                    async with async_session_maker() as session:
+                        async with session.begin():
+                            from . import db_ops
+                            await db_ops.update_repo_fields(session, repo_db_id, issue_etag=None)
+                    current_issue_etag = None
 
                 retries = 0
 

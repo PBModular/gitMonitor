@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Mapped, mapped_column, DeclarativeBase
-from sqlalchemy import BigInteger, UniqueConstraint, Index, Integer
+from sqlalchemy import BigInteger, UniqueConstraint, Index, Integer, Boolean
+from sqlalchemy.sql import expression # Added for server_default
 from typing import Optional
 
 class Base(DeclarativeBase):
@@ -23,7 +24,9 @@ class MonitoredRepo(Base):
     last_known_issue_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     issue_etag: Mapped[Optional[str]] = mapped_column(nullable=True)
 
-    # TODO: Add flags to enable/disable monitoring for commits, issues, etc.
+    # Monitoring flags
+    monitor_commits: Mapped[bool] = mapped_column(server_default=expression.true(), default=True, nullable=False)
+    monitor_issues: Mapped[bool] = mapped_column(server_default=expression.true(), default=True, nullable=False)
 
     # Ensure a chat can only monitor a specific repo URL once
     __table_args__ = (
@@ -35,5 +38,8 @@ class MonitoredRepo(Base):
         interval = self.check_interval or 'default'
         sha = self.last_commit_sha[:7] if self.last_commit_sha else 'None'
         issue_num = self.last_known_issue_number if self.last_known_issue_number else 'None'
+        commits_mon = 'C✓' if self.monitor_commits else 'C✗'
+        issues_mon = 'I✓' if self.monitor_issues else 'I✗'
         return (f"MonitoredRepo(id={self.id}, chat_id={self.chat_id}, repo={self.owner}/{self.repo}, "
-                f"interval={interval}, last_sha={sha}, last_issue_num={issue_num})")
+                f"interval={interval}, last_sha={sha}, last_issue_num={issue_num}, "
+                f"mon=({commits_mon},{issues_mon}))")
