@@ -5,7 +5,7 @@ from pyrogram import filters
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from base.module import BaseModule, command, callback_query
+from base.module import BaseModule, command, callback_query, allowed_for
 from .db import Base, MonitoredRepo
 from . import db_ops
 from .monitor import monitor_repo
@@ -188,6 +188,7 @@ class gitMonitorModule(BaseModule):
         except Exception as e:
             self.logger.error(f"Failed to remove repo ID {repo_id} for chat {chat_id} from DB: {e}", exc_info=True)
 
+    @allowed_for(["owner", "chat_admins"])
     @command("git_add")
     async def add_repo_cmd(self, _, message: Message):
         """Adds a GitHub repository to monitor for this chat."""
@@ -250,6 +251,7 @@ class gitMonitorModule(BaseModule):
                 except RPCError: pass
             else: await message.reply(error_text)
 
+    @allowed_for(["owner", "chat_admins"])
     @command("git_remove")
     async def remove_repo_cmd(self, _, message: Message):
         """Removes a specific GitHub repository from monitoring."""
@@ -324,6 +326,7 @@ class gitMonitorModule(BaseModule):
             self.logger.error(f"[{chat_id}] Error listing repos: {e}", exc_info=True)
             await message.reply(self.S["list_repos"]["error"])
 
+    @allowed_for(["owner", "chat_admins"])
     @command("git_interval")
     async def set_interval_cmd(self, _, message: Message):
         """Sets the update interval for a specific monitored repository."""
@@ -372,6 +375,7 @@ class gitMonitorModule(BaseModule):
             self.logger.error(f"[{chat_id}] Error setting interval for {repo_identifier}: {e}", exc_info=True)
             await message.reply(self.S["git_interval"]["error_generic"])
 
+    @allowed_for(["owner", "chat_admins"])
     @command("git_settings")
     async def repo_settings_cmd(self, _, message: Message):
         """Configures monitoring options for a specific repository."""
@@ -400,6 +404,7 @@ class gitMonitorModule(BaseModule):
                 return
             await send_repo_selection_list(message, repos, 0, self.S)
 
+    @allowed_for(["owner", "chat_admins"])
     @callback_query(filters.regex(r"^gitsettings_.*"))
     async def git_settings_callback_handler(self, _, call: CallbackQuery):
         """Handles all callbacks starting with gitsettings_"""
