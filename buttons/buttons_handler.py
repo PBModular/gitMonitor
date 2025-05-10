@@ -53,8 +53,12 @@ async def send_repo_selection_list(
         else:
             await message.reply_text(text, reply_markup=keyboard)
     except Exception as e:
-        module_logger = message._client.ext_module_gitMonitorModule.logger
-        module_logger.error(f"Error sending/editing repo selection list: {e}")
+        module_logger = getattr(getattr(message.chat, '_client', None), 'ext_module_gitMonitorModule', None)
+        if module_logger and hasattr(module_logger, 'logger'):
+            module_logger.logger.error(f"Error sending/editing repo selection list: {e}")
+        else:
+            print(f"Error sending/editing repo selection list (logger not found): {e}")
+
 
 async def send_repo_settings_panel(
     call_or_message,
@@ -99,33 +103,40 @@ async def handle_settings_callback(
     chat_id = call.message.chat.id
     
     parts = call.data.split("_")
-    action = parts[1]
+    action_type = parts[1] # e.g., "list", "show", "toggle"
 
-    if action == "close":
+    if action_type == "close":
         await call.message.delete()
         await call.answer()
         return
     
-    if action == "dummy":
+    if action_type == "dummy":
         await call.answer()
         return
 
-    if action == "list":
+    if action_type == "list":
         page = int(parts[2])
         async with async_session_maker() as session:
             repos = await db_ops.get_repos_for_chat(session, chat_id)
         if not repos:
             await call.answer(S["list_repos"]["none"], show_alert=True)
-            await call.message.delete()
+            if call.message.from_user and call.message.from_user.is_self:
+                try:
+                    await call.message.delete()
+                except Exception:
+                    pass
             return
         await send_repo_selection_list(call.message, repos, page, S)
         await call.answer()
         return
 
-    repo_id = int(parts[2])
-    current_list_page = int(parts[3]) if len(parts) > 3 else 0
+    repo_id: int
+    current_list_page: int
 
-    if action == "show":
+    if action_type == "show":
+        repo_id = int(parts[2])
+        current_list_page = int(parts[3])
+
         async with async_session_maker() as session:
             repo_entry = await db_ops.get_repo_by_id(session, repo_id)
         if not repo_entry or repo_entry.chat_id != chat_id:
@@ -135,14 +146,18 @@ async def handle_settings_callback(
         await call.answer()
         return
 
-    if action.startswith("toggle"):
+    if action_type == "toggle":
+        toggle_target = parts[2]
+        repo_id = int(parts[3])
+        current_list_page = int(parts[4])
+
         field_to_toggle = ""
-        if action == "toggle_commits":
+        if toggle_target == "commits":
             field_to_toggle = "monitor_commits"
-        elif action == "toggle_issues":
+        elif toggle_target == "issues":
             field_to_toggle = "monitor_issues"
         else:
-            await call.answer("Unknown toggle action", show_alert=True)
+            await call.answer("Unknown toggle target", show_alert=True)
             return
 
         updated_repo_entry = None
@@ -169,5 +184,8 @@ async def handle_settings_callback(
                 raise Exception("Repo not found after update attempt")
 
         except Exception as e:
-            module_instance.logger.error(f"Error toggling setting for repo {repo_id}: {e}", exc_info=True)
+            module_instance.logger.error(f"Error toggling setting '{field_to_toggle}' for repo {repo_id}: {e}", exc_info=True)
             await call.answer(S["git_settings"]["error"], show_alert=True)
+        return
+
+    await call.answer("Unknown settings action.", show_alert=True)
