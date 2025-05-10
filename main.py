@@ -68,7 +68,7 @@ class gitMonitorModule(BaseModule):
 
     @property
     def help_page(self):
-        return self.S["help"]
+        return self.S["help"].format(min_interval=self.min_interval)
 
     async def _start_monitor_task(self, repo_entry: MonitoredRepo):
         """Starts a monitor task for a given MonitoredRepo entry and stores it."""

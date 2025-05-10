@@ -114,9 +114,9 @@ def format_multiple_commits_message(
             )
         )
 
-    latest_commit_overall = new_commits_data_newest_first[0]
-    latest_sha_short_notif = latest_commit_overall['sha'][:7]
-    latest_commit_url_notif = escape(latest_commit_overall.get("html_url", "#"))
+    # latest_commit_overall = new_commits_data_newest_first[0]
+    # latest_sha_short_notif = latest_commit_overall['sha'][:7]
+    # latest_commit_url_notif = escape(latest_commit_overall.get("html_url", "#"))
 
     more_link = ""
     if count > max_commits_to_list:
@@ -129,7 +129,7 @@ def format_multiple_commits_message(
 
         if compare_url_base and compare_url_base != compare_url_head:
             compare_url = escape(f"https://github.com/{owner}/{repo}/compare/{compare_url_base}...{compare_url_head}")
-            more_link = strings["monitor"]["more"].format(compare_url=compare_url)
+            more_link = strings["monitor"]["more_commits"].format(compare_url=compare_url)
 
     text = strings["monitor"]["multiple_new_commits"].format(
         count=count,
