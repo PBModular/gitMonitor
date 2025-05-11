@@ -1,5 +1,6 @@
 import asyncio
-from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+import logging
+from pyrogram.types import Message, CallbackQuery
 from pyrogram.errors import RPCError
 from pyrogram import filters
 from sqlalchemy.orm import sessionmaker
@@ -8,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from base.module import BaseModule, command, callback_query, allowed_for
 from .db import Base, MonitoredRepo
 from . import db_ops
-from .monitor import monitor_repo
+from .monitoring.orchestrator import RepoMonitorOrchestrator
 from .utils import parse_github_url
 from .buttons.buttons_handler import send_repo_selection_list, send_repo_settings_panel, handle_settings_callback
 from typing import Dict, Optional
@@ -101,52 +102,70 @@ class gitMonitorModule(BaseModule):
                 except Exception as e:
                     self.logger.error(f"Error awaiting existing task cancellation for {repo_id}: {e}")
 
+        if not repo_entry.owner or not repo_entry.repo:
+            self.logger.error(f"Attempted to start monitor for repo ID {repo_entry.id} with invalid owner/repo. Skipping.")
+            return
+
+        task_logger_name = f"MonitorTask[{chat_id}][{repo_id}]"
+        task_specific_logger = self.logger.getChild(task_logger_name)
+
         task = asyncio.create_task(
             self._monitor_wrapper(
                 repo_entry=repo_entry,
                 check_interval=check_interval,
+                task_logger=task_specific_logger
             )
         )
         self.monitor_tasks[chat_id][repo_id] = task
         self.logger.info(f"Created/restarted monitor task for chat {chat_id}, repo ID {repo_id} ({repo_entry.owner}/{repo_entry.repo}), interval {check_interval}s. "
                          f"C:{'✓' if repo_entry.monitor_commits else '✗'} I:{'✓' if repo_entry.monitor_issues else '✗'}")
 
-    async def _monitor_wrapper(self, repo_entry: MonitoredRepo, check_interval: int):
-        """Wraps monitor_repo to handle task completion, cleanup, and DB removal on permanent stop."""
+    async def _monitor_wrapper(self, repo_entry: MonitoredRepo, check_interval: int, task_logger: logging.Logger):
         chat_id = repo_entry.chat_id
         repo_id = repo_entry.id
         repo_url = repo_entry.repo_url
+
+        orchestrator = RepoMonitorOrchestrator(
+            bot=self.bot,
+            chat_id=chat_id,
+            repo_entry=repo_entry,
+            base_check_interval=check_interval,
+            max_retries=self.max_retries,
+            github_token=self.github_token,
+            strings=self.S,
+            async_session_maker=self.async_session,
+            module_config={
+                "max_commits_to_list_in_notification": self.max_commits_in_notification,
+                "max_issues_to_list_in_notification": self.max_issues_in_notification,
+            },
+            parent_logger=task_logger
+        )
+
         should_stop_permanently = False
         try:
-            should_stop_permanently = await monitor_repo(
-                bot=self.bot,
-                chat_id=chat_id,
-                repo_entry=repo_entry,
-                check_interval=check_interval,
-                max_retries=self.max_retries,
-                github_token=self.github_token,
-                strings=self.S,
-                async_session_maker=self.async_session,
-                max_commits_to_list_in_notification=self.max_commits_in_notification,
-                max_issues_to_list_in_notification=self.max_issues_in_notification
-            )
-            if should_stop_permanently:
-                self.logger.info(f"Monitor for repo ID {repo_id} ({repo_url}) requested permanent stop. Removing DB entry.")
-                await self._remove_repo_from_db_and_task(chat_id, repo_id, task_already_stopped=True)
+            should_stop_permanently = await orchestrator.run()
 
-        except asyncio.CancelledError:
-            self.logger.info(f"Monitor wrapper for repo ID {repo_id} ({repo_url}) was cancelled.")
-        except Exception as e:
-            self.logger.error(f"Unexpected error in monitor wrapper for repo ID {repo_id} ({repo_url}): {e}", exc_info=True)
-            should_stop_permanently = True 
-            await self._remove_repo_from_db_and_task(chat_id, repo_id, task_already_stopped=True)
-        finally:
-            if not should_stop_permanently:
+            if should_stop_permanently:
+                task_logger.info(f"Monitor requested permanent stop. Removing DB entry.")
                 if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
                     del self.monitor_tasks[chat_id][repo_id]
-                    if not self.monitor_tasks[chat_id]:
-                        del self.monitor_tasks[chat_id]
-                    self.logger.debug(f"Removed task entry for repo ID {repo_id} from chat {chat_id} in wrapper's finally block.")
+                    if not self.monitor_tasks[chat_id]: del self.monitor_tasks[chat_id]
+
+                await self._remove_repo_from_db_and_task(chat_id, repo_id, task_already_stopped=True)
+        except asyncio.CancelledError:
+            task_logger.info(f"Monitor wrapper was cancelled.")
+        except Exception as e:
+            task_logger.error(f"Unexpected error in monitor wrapper: {e}", exc_info=True)
+            should_stop_permanently = True
+            if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
+                del self.monitor_tasks[chat_id][repo_id]
+                if not self.monitor_tasks[chat_id]: del self.monitor_tasks[chat_id]
+            await self._remove_repo_from_db_and_task(chat_id, repo_id, task_already_stopped=True)
+        finally:
+            if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
+                del self.monitor_tasks[chat_id][repo_id]
+                if not self.monitor_tasks[chat_id]: del self.monitor_tasks[chat_id]
+            task_logger.info(f"Monitor wrapper finished. Permanent stop: {should_stop_permanently}")
 
     async def _stop_monitor_task(self, chat_id: int, repo_id: int) -> bool:
         """Stops a specific monitor task. Does NOT remove from DB."""
