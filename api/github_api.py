@@ -81,7 +81,13 @@ class GitHubAPIClient:
             self.logger.warning(f"aiohttp.ClientError during request to {url}: {e}")
             raise ClientRequestError(0, str(e)) 
 
-    async def fetch_commits(self, owner: str, repo: str, etag: Optional[str] = None, per_page: int = 30) -> GitHubAPIResponse:
+    async def fetch_commits(
+        self,
+        owner: str,
+        repo: str,
+        etag: Optional[str] = None,
+        per_page: int = 30
+        ) -> GitHubAPIResponse:
         url = f"{self.BASE_URL}/repos/{owner}/{repo}/commits"
         params = {"per_page": per_page}
         headers = {}
