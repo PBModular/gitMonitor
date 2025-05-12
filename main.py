@@ -329,9 +329,9 @@ class gitMonitorModule(BaseModule):
                 for repo_entry in monitored_repos:
                     interval_val = repo_entry.check_interval or self.default_check_interval
                     interval_str = f"{interval_val}s"
-                    commit_status = self.S["list_repos"]["commit_status_enabled"] if repo_entry.monitor_commits else self.S["list_repos"]["commit_status_disabled"]
-                    issue_status = self.S["list_repos"]["issue_status_enabled"] if repo_entry.monitor_issues else self.S["list_repos"]["issue_status_disabled"]
-                    tag_status = self.S["list_repos"]["tag_status_enabled"] if repo_entry.monitor_tags else self.S["list_repos"]["tag_status_disabled"]
+                    commit_status = self.S["list_repos"]["status_enabled"] if repo_entry.monitor_commits else self.S["list_repos"]["status_disabled"]
+                    issue_status = self.S["list_repos"]["status_enabled"] if repo_entry.monitor_issues else self.S["list_repos"]["status_disabled"]
+                    tag_status = self.S["list_repos"]["status_enabled"] if repo_entry.monitor_tags else self.S["list_repos"]["status_disabled"]
 
                     repos_list_text_parts.append(
                         self.S["list_repos"]["repo_line_format"].format(
