@@ -28,8 +28,11 @@ async def create_repo_entry(
     commit_etag: Optional[str] = None,
     last_known_issue_number: Optional[int] = None,
     issue_etag: Optional[str] = None,
+    last_known_tag_name: Optional[str] = None,
+    tag_etag: Optional[str] = None,
     monitor_commits: bool = True,
-    monitor_issues: bool = True
+    monitor_issues: bool = True,
+    monitor_tags: bool = True
 ) -> MonitoredRepo:
     """Creates and adds a new MonitoredRepo entry to the session, then flushes."""
     new_repo_entry = MonitoredRepo(
@@ -42,8 +45,11 @@ async def create_repo_entry(
         commit_etag=commit_etag,
         last_known_issue_number=last_known_issue_number,
         issue_etag=issue_etag,
+        last_known_tag_name=last_known_tag_name,
+        tag_etag=tag_etag,
         monitor_commits=monitor_commits,
-        monitor_issues=monitor_issues
+        monitor_issues=monitor_issues,
+        monitor_tags=monitor_tags
     )
     session.add(new_repo_entry)
     await session.flush()

@@ -23,6 +23,7 @@ class gitMonitorModule(BaseModule):
         self.min_interval = 10
         self.max_commits_in_notification = self.module_config.get("max_commits_to_list_in_notification", 4)
         self.max_issues_in_notification = self.module_config.get("max_issues_to_list_in_notification", 4)
+        self.max_tags_in_notification = self.module_config.get("max_tags_to_list_in_notification", 3)
 
         if not self.github_token:
             self.logger.warning("Valid GitHub API token not found in config. Rate limits will be lower.")
@@ -118,14 +119,15 @@ class gitMonitorModule(BaseModule):
                 task_logger=task_specific_logger
             )
         )
+        if chat_id not in self.monitor_tasks:
+            self.monitor_tasks[chat_id] = {}
         self.monitor_tasks[chat_id][repo_id] = task
         self.logger.info(f"Created/restarted monitor task for chat {chat_id}, repo ID {repo_id} ({repo_entry.owner}/{repo_entry.repo}), interval {check_interval}s. "
-                         f"C:{'✓' if repo_entry.monitor_commits else '✗'} I:{'✓' if repo_entry.monitor_issues else '✗'}")
+                         f"C:{'✓' if repo_entry.monitor_commits else '✗'} I:{'✓' if repo_entry.monitor_issues else '✗'} T:{'✓' if repo_entry.monitor_tags else '✗'}")
 
     async def _monitor_wrapper(self, repo_entry: MonitoredRepo, check_interval: int, task_logger: logging.Logger):
         chat_id = repo_entry.chat_id
         repo_id = repo_entry.id
-        repo_url = repo_entry.repo_url
 
         orchestrator = RepoMonitorOrchestrator(
             bot=self.bot,
@@ -139,6 +141,7 @@ class gitMonitorModule(BaseModule):
             module_config={
                 "max_commits_to_list_in_notification": self.max_commits_in_notification,
                 "max_issues_to_list_in_notification": self.max_issues_in_notification,
+                "max_tags_to_list_in_notification": self.max_tags_in_notification,
             },
             parent_logger=task_logger
         )
@@ -259,7 +262,9 @@ class gitMonitorModule(BaseModule):
         except IntegrityError:
             self.logger.warning(f"[{chat_id}] Integrity error (likely race condition) adding {repo_url}.")
             error_text = self.S["add_repo"]["already_monitoring"].format(owner=owner, repo=repo_name_parsed)
-            if confirmation_msg: await confirmation_msg.edit_text(error_text)
+            if confirmation_msg: 
+                try: await confirmation_msg.edit_text(error_text)
+                except RPCError: pass
             else: await message.reply(error_text)
         except Exception as e:
             self.logger.error(f"[{chat_id}] Error adding repo {repo_url}: {e}", exc_info=True)
@@ -326,6 +331,7 @@ class gitMonitorModule(BaseModule):
                     interval_str = f"{interval_val}s"
                     commit_status = self.S["list_repos"]["commit_status_enabled"] if repo_entry.monitor_commits else self.S["list_repos"]["commit_status_disabled"]
                     issue_status = self.S["list_repos"]["issue_status_enabled"] if repo_entry.monitor_issues else self.S["list_repos"]["issue_status_disabled"]
+                    tag_status = self.S["list_repos"]["tag_status_enabled"] if repo_entry.monitor_tags else self.S["list_repos"]["tag_status_disabled"]
 
                     repos_list_text_parts.append(
                         self.S["list_repos"]["repo_line_format"].format(
@@ -333,7 +339,8 @@ class gitMonitorModule(BaseModule):
                             repo_url=repo_entry.repo_url,
                             interval_str=interval_str,
                             commit_status=commit_status,
-                            issue_status=issue_status
+                            issue_status=issue_status,
+                            tag_status=tag_status
                         )
                     )
 

@@ -73,6 +73,7 @@ async def send_repo_settings_panel(
 
     commit_status = S["git_settings"]["status_enabled"] if repo_entry.monitor_commits else S["git_settings"]["status_disabled"]
     issue_status = S["git_settings"]["status_enabled"] if repo_entry.monitor_issues else S["git_settings"]["status_disabled"]
+    tag_status = S["git_settings"]["status_enabled"] if repo_entry.monitor_tags else S["git_settings"]["status_disabled"]
 
     buttons = [
         [InlineKeyboardButton(
@@ -82,6 +83,10 @@ async def send_repo_settings_panel(
         [InlineKeyboardButton(
             S["git_settings"]["issues_monitoring"].format(status=issue_status),
             callback_data=f"gitsettings_toggle_issues_{repo_entry.id}_{current_list_page}"
+        )],
+        [InlineKeyboardButton(
+            S["git_settings"]["tags_monitoring"].format(status=tag_status),
+            callback_data=f"gitsettings_toggle_tags_{repo_entry.id}_{current_list_page}"
         )],
         [InlineKeyboardButton(S["git_settings"]["back_to_list_btn"], callback_data=f"gitsettings_list_{current_list_page}")],
         [InlineKeyboardButton(S["git_settings"]["close_btn"], callback_data="gitsettings_close")]
@@ -95,7 +100,7 @@ async def send_repo_settings_panel(
 
 async def handle_settings_callback(
     call: CallbackQuery,
-    module_instance: 'gitMonitorModule' 
+    module_instance: 'gitMonitorModule'
 ):
     """Handles callbacks from the settings UI."""
     S = module_instance.S
@@ -103,7 +108,7 @@ async def handle_settings_callback(
     chat_id = call.message.chat.id
     
     parts = call.data.split("_")
-    action_type = parts[1] # e.g., "list", "show", "toggle"
+    action_type = parts[1]
 
     if action_type == "close":
         await call.message.delete()
@@ -156,6 +161,8 @@ async def handle_settings_callback(
             field_to_toggle = "monitor_commits"
         elif toggle_target == "issues":
             field_to_toggle = "monitor_issues"
+        elif toggle_target == "tags":
+            field_to_toggle = "monitor_tags"
         else:
             await call.answer("Unknown toggle target", show_alert=True)
             return
@@ -174,7 +181,7 @@ async def handle_settings_callback(
                     
                     await db_ops.update_repo_fields(session, repo_id, **{field_to_toggle: new_value})
                 async with session.begin():
-                     updated_repo_entry = await db_ops.get_repo_by_id(session, repo_id)
+                    updated_repo_entry = await db_ops.get_repo_by_id(session, repo_id)
 
             if updated_repo_entry:
                 await module_instance._start_monitor_task(updated_repo_entry)

@@ -115,3 +115,17 @@ class GitHubAPIClient:
         if etag:
             headers["If-None-Match"] = etag
         return await self._request("GET", url, params=params, request_specific_headers=headers)
+
+    async def fetch_tags(
+        self,
+        owner: str,
+        repo: str,
+        etag: Optional[str] = None,
+        per_page: int = 30
+    ) -> GitHubAPIResponse:
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/tags"
+        params = {"per_page": per_page}
+        headers = {}
+        if etag:
+            headers["If-None-Match"] = etag
+        return await self._request("GET", url, params=params, request_specific_headers=headers)

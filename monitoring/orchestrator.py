@@ -9,6 +9,7 @@ from ..api.github_api import GitHubAPIClient, APIError
 from .base_checker import BaseChecker
 from .commit_checker import CommitChecker
 from .issue_checker import IssueChecker
+from .tag_checker import TagChecker
 from .error_handler import handle_api_error
 
 if TYPE_CHECKING:
@@ -31,7 +32,6 @@ class RepoMonitorOrchestrator:
     ):
         self.bot = bot
         self.chat_id = chat_id
-        self.repo_entry_initial = repo_entry
         self.base_check_interval = base_check_interval
         self.max_retries = max_retries
         self.github_token = github_token
@@ -70,8 +70,8 @@ class RepoMonitorOrchestrator:
             self.logger, self.strings, self.bot, self.module_config
         )
 
+        # Commit Checker
         commit_checker_active_in_db = current_repo_config.monitor_commits
-
         if commit_checker_active_in_db:
             checker = CommitChecker(*common_args_tuple)
             await checker.load_initial_state()
@@ -81,10 +81,10 @@ class RepoMonitorOrchestrator:
             temp_checker = CommitChecker(*common_args_tuple)
             await temp_checker.load_initial_state()
             await temp_checker.clear_state_on_disable()
-            self.logger.info("Commit monitoring DISABLED, ETag cleared if was present.")
+            self.logger.info("Commit monitoring DISABLED.")
 
+        # Issue Checker
         issue_checker_active_in_db = current_repo_config.monitor_issues
-
         if issue_checker_active_in_db:
             checker = IssueChecker(*common_args_tuple)
             await checker.load_initial_state()
@@ -94,7 +94,20 @@ class RepoMonitorOrchestrator:
             temp_checker = IssueChecker(*common_args_tuple)
             await temp_checker.load_initial_state()
             await temp_checker.clear_state_on_disable()
-            self.logger.info("Issue monitoring DISABLED, ETags cleared if were present.")
+            self.logger.info("Issue monitoring DISABLED.")
+
+        # Tag Checker
+        tag_checker_active_in_db = current_repo_config.monitor_tags
+        if tag_checker_active_in_db:
+            checker = TagChecker(*common_args_tuple)
+            await checker.load_initial_state()
+            self.checkers.append(checker)
+            self.logger.info("Tag monitoring ENABLED.")
+        else:
+            temp_checker = TagChecker(*common_args_tuple)
+            await temp_checker.load_initial_state()
+            await temp_checker.clear_state_on_disable()
+            self.logger.info("Tag monitoring DISABLED.")
 
         if not self.checkers:
             self.logger.warning(f"No checkers active for {self.owner}/{self.repo_name}. Monitor will idle and periodically re-check config.")
@@ -110,6 +123,14 @@ class RepoMonitorOrchestrator:
 
         is_cancelled = False
         try:
+            initial_repo_config = await self._refresh_repo_entry_from_db()
+            if self._stop_permanently_requested or initial_repo_config is None:
+                self._running = False
+            else:
+                await self._initialize_checkers(initial_repo_config)
+                if self._stop_permanently_requested:
+                    self._running = False
+
             while self._running:
                 latest_repo_config = await self._refresh_repo_entry_from_db()
                 if self._stop_permanently_requested or latest_repo_config is None:
@@ -117,18 +138,24 @@ class RepoMonitorOrchestrator:
 
                 commit_flag_db = latest_repo_config.monitor_commits
                 issue_flag_db = latest_repo_config.monitor_issues
+                tag_flag_db = latest_repo_config.monitor_tags
+
                 commit_checker_present = any(isinstance(c, CommitChecker) for c in self.checkers)
                 issue_checker_present = any(isinstance(c, IssueChecker) for c in self.checkers)
+                tag_checker_present = any(isinstance(c, TagChecker) for c in self.checkers)
 
-                if (commit_flag_db != commit_checker_present) or \
-                   (issue_flag_db != issue_checker_present) or \
-                   not self.checkers:
-                    self.logger.info("Monitoring flags changed or first run with checkers. Re-initializing checkers.")
+                config_changed = (commit_flag_db != commit_checker_present) or \
+                                 (issue_flag_db != issue_checker_present) or \
+                                 (tag_flag_db != tag_checker_present)
+
+                if config_changed:
+                    self.logger.info("Monitoring flags changed in DB. Re-initializing checkers.")
                     await self._initialize_checkers(latest_repo_config)
                     if self._stop_permanently_requested:
+                        self.logger.info("Permanent stop requested during checker re-initialization.")
                         self._running = False; break
 
-                if not self.checkers:
+                if not self.checkers and self._running:
                     await asyncio.sleep(self.base_check_interval)
                     continue
 
@@ -152,13 +179,14 @@ class RepoMonitorOrchestrator:
                         )
                     elif isinstance(e, (aiohttp.ClientError, asyncio.TimeoutError)):
                         if self._current_retry_attempt >= self.max_retries:
-                            self.logger.error(f"Max retries for network error. Stopping.")
+                            self.logger.error(f"Max retries ({self.max_retries}) reached for network/timeout error. Stopping monitor.")
                             try: await self.bot.send_message(self.chat_id, self.strings["monitor"]["network_error"].format(repo_url=self.repo_url))
                             except: pass
                             should_stop_now = True
-                        else: self.logger.info(f"Network error. Waiting {wait_duration:.2f}s.")
+                        else: 
+                            self.logger.info(f"Network/timeout error. Waiting {wait_duration:.2f}s (Attempt {self._current_retry_attempt}/{self.max_retries}).")
                     else:
-                        self.logger.error(f"Unexpected critical error in check cycle. Stopping.", exc_info=True)
+                        self.logger.error(f"Unexpected critical error in check cycle. Stopping monitor.", exc_info=True)
                         try: await self.bot.send_message(self.chat_id, self.strings["monitor"]["internal_error"].format(repo_url=self.repo_url))
                         except: pass
                         should_stop_now = True
@@ -167,7 +195,7 @@ class RepoMonitorOrchestrator:
                         self._stop_permanently_requested = True
                         self._running = False; break 
 
-                    if wait_duration > 0:
+                    if self._running and wait_duration > 0:
                         self.logger.info(f"Monitor sleeping for {wait_duration:.2f}s due to error.")
                         await asyncio.sleep(wait_duration)
                     continue
@@ -176,22 +204,22 @@ class RepoMonitorOrchestrator:
                     await asyncio.sleep(self.base_check_interval)
 
         except asyncio.CancelledError:
-            self.logger.info(f"Monitor cancelled.")
+            self.logger.info(f"Monitor for {self.owner}/{self.repo_name} was cancelled.")
             is_cancelled = True
         except Exception as outer_e:
-            self.logger.critical(f"Critical unexpected error in orchestrator: {outer_e}", exc_info=True)
+            self.logger.critical(f"Critical unexpected error in orchestrator for {self.owner}/{self.repo_name}: {outer_e}", exc_info=True)
             try:
                 await self.bot.send_message(
                     self.chat_id,
                     self.strings["monitor"]["internal_error"].format(repo_url=self.repo_url)
                 )
             except Exception as send_err_outer:
-                self.logger.warning(f"Failed to send 'internal_error' (orchestrator outer) notification for {self.owner}/{self.repo_name}: {send_err_outer}")
+                self.logger.warning(f"Failed to send 'internal_error' (orchestrator outer) notification: {send_err_outer}")
             self._stop_permanently_requested = True
         finally:
             self._running = False
             if self.api_client:
                 await self.api_client.close()
-            self.logger.info(f"Monitor finished. Permanent stop requested: {self._stop_permanently_requested}, Cancelled: {is_cancelled}")
+            self.logger.info(f"Monitor for {self.owner}/{self.repo_name} finished. Permanent stop requested: {self._stop_permanently_requested}, Cancelled: {is_cancelled}")
 
         return self._stop_permanently_requested and not is_cancelled

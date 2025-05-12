@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Mapped, mapped_column, DeclarativeBase
 from sqlalchemy import BigInteger, UniqueConstraint, Index, Integer, Boolean
-from sqlalchemy.sql import expression # Added for server_default
+from sqlalchemy.sql import expression
 from typing import Optional
 
 class Base(DeclarativeBase):
@@ -28,9 +28,14 @@ class MonitoredRepo(Base):
     last_closed_issue_update_ts: Mapped[Optional[str]] = mapped_column(nullable=True)
     closed_issue_etag: Mapped[Optional[str]] = mapped_column(nullable=True)
 
+    # Tag
+    last_known_tag_name: Mapped[Optional[str]] = mapped_column(nullable=True)
+    tag_etag: Mapped[Optional[str]] = mapped_column(nullable=True)
+
     # Monitoring flags
     monitor_commits: Mapped[bool] = mapped_column(server_default=expression.true(), default=True, nullable=False)
     monitor_issues: Mapped[bool] = mapped_column(server_default=expression.true(), default=True, nullable=False)
+    monitor_tags: Mapped[bool] = mapped_column(server_default=expression.true(), default=True, nullable=False)
 
     # Ensure a chat can only monitor a specific repo URL once
     __table_args__ = (
@@ -43,8 +48,10 @@ class MonitoredRepo(Base):
         sha = self.last_commit_sha[:7] if self.last_commit_sha else 'None'
         issue_num = self.last_known_issue_number if self.last_known_issue_number else 'None'
         closed_ts = self.last_closed_issue_update_ts if self.last_closed_issue_update_ts else 'None'
+        tag_name = self.last_known_tag_name if self.last_known_tag_name else 'None'
         commits_mon = 'C✓' if self.monitor_commits else 'C✗'
         issues_mon = 'I✓' if self.monitor_issues else 'I✗'
+        tags_mon = 'T✓' if self.monitor_tags else 'T✗'
         return (f"MonitoredRepo(id={self.id}, chat_id={self.chat_id}, repo={self.owner}/{self.repo}, "
-                f"interval={interval}, last_sha={sha}, last_issue_num={issue_num}, last_closed_ts={closed_ts}, "
-                f"mon=({commits_mon},{issues_mon}))")
+                f"interval={interval}, last_sha={sha}, last_issue_num={issue_num}, last_closed_ts={closed_ts}, last_tag={tag_name}, "
+                f"mon=({commits_mon},{issues_mon},{tags_mon}))")
