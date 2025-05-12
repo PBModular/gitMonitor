@@ -101,6 +101,8 @@ class gitMonitorModule(BaseModule):
                     self.logger.info(f"Existing task for repo ID {repo_id} properly cancelled.")
                 except Exception as e:
                     self.logger.error(f"Error awaiting existing task cancellation for {repo_id}: {e}")
+            if not self.monitor_tasks[chat_id]:
+                del self.monitor_tasks[chat_id]
 
         if not repo_entry.owner or not repo_entry.repo:
             self.logger.error(f"Attempted to start monitor for repo ID {repo_entry.id} with invalid owner/repo. Skipping.")
