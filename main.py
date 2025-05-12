@@ -148,26 +148,21 @@ class gitMonitorModule(BaseModule):
             should_stop_permanently = await orchestrator.run()
 
             if should_stop_permanently:
-                task_logger.info(f"Monitor requested permanent stop. Removing DB entry.")
-                if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
-                    del self.monitor_tasks[chat_id][repo_id]
-                    if not self.monitor_tasks[chat_id]: del self.monitor_tasks[chat_id]
-
+                task_logger.info(f"Monitor requested permanent stop by orchestrator. Removing DB entry.")
                 await self._remove_repo_from_db_and_task(chat_id, repo_id, task_already_stopped=True)
         except asyncio.CancelledError:
-            task_logger.info(f"Monitor wrapper was cancelled.")
+            task_logger.info(f"Monitor wrapper for repo ID {repo_id} was cancelled.")
         except Exception as e:
-            task_logger.error(f"Unexpected error in monitor wrapper: {e}", exc_info=True)
+            task_logger.error(f"Unexpected error in monitor wrapper for repo ID {repo_id}: {e}", exc_info=True)
             should_stop_permanently = True
-            if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
-                del self.monitor_tasks[chat_id][repo_id]
-                if not self.monitor_tasks[chat_id]: del self.monitor_tasks[chat_id]
             await self._remove_repo_from_db_and_task(chat_id, repo_id, task_already_stopped=True)
         finally:
-            if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
-                del self.monitor_tasks[chat_id][repo_id]
-                if not self.monitor_tasks[chat_id]: del self.monitor_tasks[chat_id]
-            task_logger.info(f"Monitor wrapper finished. Permanent stop: {should_stop_permanently}")
+            if not should_stop_permanently:
+                if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
+                    del self.monitor_tasks[chat_id][repo_id]
+                    if not self.monitor_tasks[chat_id]:
+                        del self.monitor_tasks[chat_id]
+            task_logger.info(f"Monitor wrapper for repo ID {repo_id} finished. Permanent stop: {should_stop_permanently}")
 
     async def _stop_monitor_task(self, chat_id: int, repo_id: int) -> bool:
         """Stops a specific monitor task. Does NOT remove from DB."""
