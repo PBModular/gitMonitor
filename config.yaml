@@ -12,3 +12,6 @@ config:
   api_token: ""  # Place for YOUR GitHub API Token
   default_check_interval: 300  # Default interval in seconds between checks
   max_retries: 5  # Maximum number of retries after network errors
+  max_commits: 6 # Maximum number of commits to list in a multi-commit notification
+  max_issues: 4  # Maximum number of issues to list in a multi-issue notification
+  max_tags: 3    # Maximum number of tags to list in a multi-tag notification

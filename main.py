@@ -21,14 +21,13 @@ class gitMonitorModule(BaseModule):
         self.default_check_interval = self.module_config.get("default_check_interval", 60)
         self.max_retries = self.module_config.get("max_retries", 5)
         self.min_interval = 10
-        self.max_commits_in_notification = self.module_config.get("max_commits_to_list_in_notification", 4)
-        self.max_issues_in_notification = self.module_config.get("max_issues_to_list_in_notification", 4)
-        self.max_tags_in_notification = self.module_config.get("max_tags_to_list_in_notification", 3)
+        self.max_commits = self.module_config.get("max_commits", 4)
+        self.max_issues = self.module_config.get("max_issues", 4)
+        self.max_tags = self.module_config.get("max_tags", 3)
 
         if not self.github_token:
             self.logger.warning("Valid GitHub API token not found in config. Rate limits will be lower.")
         self._async_session_maker: Optional[sessionmaker[AsyncSession]] = None
-        self.bot.ext_module_gitMonitorModule = self
 
     @property
     def db_meta(self):
@@ -139,9 +138,9 @@ class gitMonitorModule(BaseModule):
             strings=self.S,
             async_session_maker=self.async_session,
             module_config={
-                "max_commits_to_list_in_notification": self.max_commits_in_notification,
-                "max_issues_to_list_in_notification": self.max_issues_in_notification,
-                "max_tags_to_list_in_notification": self.max_tags_in_notification,
+                "max_commits": self.max_commits,
+                "max_issues": self.max_issues,
+                "max_tags": self.max_tags,
             },
             parent_logger=task_logger
         )
