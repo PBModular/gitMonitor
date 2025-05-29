@@ -26,7 +26,7 @@ def identify_new_commits(
     latest_commit_sha_on_github = api_data[0]["sha"]
     
     if known_last_sha is None:
-        return list(api_data), latest_commit_sha_on_github, True, False
+        return [], latest_commit_sha_on_github, True, False
 
     if latest_commit_sha_on_github == known_last_sha:
         return [], latest_commit_sha_on_github, False, False
