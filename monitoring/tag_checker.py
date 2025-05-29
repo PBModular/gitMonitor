@@ -11,7 +11,7 @@ class TagChecker(BaseChecker):
         super().__init__(*args, **kwargs)
         self.current_last_tag_name: Optional[str] = None
         self.current_tag_etag: Optional[str] = None
-        self.max_tags_to_list = self.config.get("max_tags_to_list_in_notification", 3)
+        self.max_tags_to_list = self.config.get("max_tags", 3)
 
     async def load_initial_state(self) -> None:
         self.current_last_tag_name = self.repo_entry.last_known_tag_name

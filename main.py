@@ -20,10 +20,7 @@ class gitMonitorModule(BaseModule):
         self.github_token = self.module_config.get("api_token")
         self.default_check_interval = self.module_config.get("default_check_interval", 60)
         self.max_retries = self.module_config.get("max_retries", 5)
-        self.min_interval = 10
-        self.max_commits = self.module_config.get("max_commits", 4)
-        self.max_issues = self.module_config.get("max_issues", 4)
-        self.max_tags = self.module_config.get("max_tags", 3)
+        self.min_interval = 10 
 
         if not self.github_token:
             self.logger.warning("Valid GitHub API token not found in config. Rate limits will be lower.")
@@ -111,10 +108,16 @@ class gitMonitorModule(BaseModule):
         task_logger_name = f"MonitorTask[{chat_id}][{repo_id}]"
         task_specific_logger = self.logger.getChild(task_logger_name)
 
+        orchestrator_module_config = {
+            "max_commits": self.module_config.get("max_commits", 4),
+            "max_issues": self.module_config.get("max_issues", 4),
+            "max_tags": self.module_config.get("max_tags", 3),
+        }
         task = asyncio.create_task(
             self._monitor_wrapper(
                 repo_entry=repo_entry,
                 check_interval=check_interval,
+                module_config_for_orchestrator=orchestrator_module_config,
                 task_logger=task_specific_logger
             )
         )
@@ -124,7 +127,7 @@ class gitMonitorModule(BaseModule):
         self.logger.info(f"Created/restarted monitor task for chat {chat_id}, repo ID {repo_id} ({repo_entry.owner}/{repo_entry.repo}), interval {check_interval}s. "
                          f"C:{'✓' if repo_entry.monitor_commits else '✗'} I:{'✓' if repo_entry.monitor_issues else '✗'} T:{'✓' if repo_entry.monitor_tags else '✗'}")
 
-    async def _monitor_wrapper(self, repo_entry: MonitoredRepo, check_interval: int, task_logger: logging.Logger):
+    async def _monitor_wrapper(self, repo_entry: MonitoredRepo, check_interval: int, module_config_for_orchestrator: Dict[str, Any], task_logger: logging.Logger):
         chat_id = repo_entry.chat_id
         repo_id = repo_entry.id
 
@@ -137,11 +140,7 @@ class gitMonitorModule(BaseModule):
             github_token=self.github_token,
             strings=self.S,
             async_session_maker=self.async_session,
-            module_config={
-                "max_commits": self.max_commits,
-                "max_issues": self.max_issues,
-                "max_tags": self.max_tags,
-            },
+            module_config=module_config_for_orchestrator,
             parent_logger=task_logger
         )
 

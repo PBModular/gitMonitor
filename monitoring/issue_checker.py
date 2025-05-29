@@ -15,7 +15,7 @@ class IssueChecker(BaseChecker):
         self.current_issue_etag: Optional[str] = None
         self.current_last_closed_ts: Optional[str] = None
         self.current_closed_issue_etag: Optional[str] = None
-        self.max_issues_to_list = self.config.get("max_issues_to_list_in_notification", 4)
+        self.max_issues_to_list = self.config.get("max_issues", 4)
 
     async def load_initial_state(self) -> None:
         self.current_last_issue_number = self.repo_entry.last_known_issue_number

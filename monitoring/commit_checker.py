@@ -11,7 +11,7 @@ class CommitChecker(BaseChecker):
         super().__init__(*args, **kwargs)
         self.current_last_sha: Optional[str] = None
         self.current_commit_etag: Optional[str] = None
-        self.max_commits_to_list = self.config.get("max_commits_to_list_in_notification", 4)
+        self.max_commits_to_list = self.config.get("max_commits", 4)
 
     async def load_initial_state(self) -> None:
         self.current_last_sha = self.repo_entry.last_commit_sha
