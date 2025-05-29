@@ -230,10 +230,10 @@ async def handle_settings_callback(
         await call.answer()
 
         try:
-            response_msg: Message = await module_instance.bot.listen(
+            response_msg: Message = await module_instance._listen(
                 chat_id=chat_id,
                 user_id=user_id,
-                filters=filters.text & ~filters.command,
+                message_filters=filters.text & ~filters.regex(r"^/\S+"),
                 timeout=60
             )
             
