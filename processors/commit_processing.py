@@ -119,7 +119,7 @@ def format_multiple_commits_message(
     latest_commit_url_notif = escape(latest_commit_overall.get("html_url", "#"))
 
     more_link_text = ""
-    if count > max_to_list:
+    if count > max_to_list and previous_known_sha:
         compare_url_base = previous_known_sha
         compare_url_head = new_commits_data_newest_first[0]['sha']
 
