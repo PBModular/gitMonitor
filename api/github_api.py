@@ -81,6 +81,15 @@ class GitHubAPIClient:
             self.logger.warning(f"aiohttp.ClientError during request to {url}: {e}")
             raise ClientRequestError(0, str(e)) 
 
+    async def fetch_repo_details(
+        self,
+        owner: str,
+        repo: str
+    ) -> GitHubAPIResponse:
+        """Fetches general details for a repository."""
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}"
+        return await self._request("GET", url)
+
     async def fetch_branches(
         self,
         owner: str,

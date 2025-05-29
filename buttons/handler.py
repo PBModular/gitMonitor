@@ -127,11 +127,20 @@ async def handle_settings_callback(
 
         temp_api_client = GitHubAPIClient(token=module_instance.github_token, loop=asyncio.get_event_loop())
         branches_data = []
+        github_default_branch_name: Optional[str] = None
         try:
             await call.answer(S["git_settings"]["fetching_branches"])
-            response = await temp_api_client.fetch_branches(repo_entry_for_branches.owner, repo_entry_for_branches.repo)
-            if response.data and isinstance(response.data, list):
-                branches_data = sorted([branch_item['name'] for branch_item in response.data if 'name' in branch_item])
+            try:
+                repo_details_response = await temp_api_client.fetch_repo_details(repo_entry_for_branches.owner, repo_entry_for_branches.repo)
+                if repo_details_response.data and isinstance(repo_details_response.data, dict):
+                    github_default_branch_name = repo_details_response.data.get('default_branch')
+            except APIError as e_details:
+                module_instance.logger.warning(f"API Error fetching repo details for {repo_entry_for_branches.owner}/{repo_entry_for_branches.repo}: {e_details}")
+                await call.answer(S["git_settings"]["fetch_repo_details_error"], show_alert=True)
+
+            branches_response = await temp_api_client.fetch_branches(repo_entry_for_branches.owner, repo_entry_for_branches.repo)
+            if branches_response.data and isinstance(branches_response.data, list):
+                branches_data = sorted([branch_item['name'] for branch_item in branches_response.data if 'name' in branch_item])
         except APIError as e:
             module_instance.logger.warning(f"API Error fetching branches for {repo_entry_for_branches.owner}/{repo_entry_for_branches.repo}: {e}")
             await call.answer(S["git_settings"]["fetch_branches_error"], show_alert=True)
@@ -151,7 +160,8 @@ async def handle_settings_callback(
             "repo_name_str": repo_entry_for_branches.repo,
             "branches": branches_data,
             "original_settings_list_page": current_list_page,
-            "current_branch_name": repo_entry_for_branches.branch
+            "current_branch_name": repo_entry_for_branches.branch,
+            "github_default_branch": github_default_branch_name
         }
         await send_branch_selection_list(call, S, module_instance, branch_page=0)
         return

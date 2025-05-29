@@ -25,9 +25,19 @@ async def send_repo_selection_list(
     paginated_repos = repos[start_idx:end_idx]
 
     for repo_entry in paginated_repos:
+        branch_display_name = escape(repo_entry.branch) if repo_entry.branch else S["git_settings"]["default_branch_display"]
+        commit_char = S["list_repos"]["status_enabled"] if repo_entry.monitor_commits else S["list_repos"]["status_disabled"]
+        issue_char = S["list_repos"]["status_enabled"] if repo_entry.monitor_issues else S["list_repos"]["status_disabled"]
+        tag_char = S["list_repos"]["status_enabled"] if repo_entry.monitor_tags else S["list_repos"]["status_disabled"]
+
+        status_str = S["git_settings"].get("repo_list_status_format", "({branch}, C{c_char} I{i_char} T{t_char})").format(
+            branch=branch_display_name, c_char=commit_char, i_char=issue_char, t_char=tag_char
+        )
+        button_text = f"{escape(repo_entry.owner)}/{escape(repo_entry.repo)} {status_str}"
+
         buttons.append([
             InlineKeyboardButton(
-                f"{repo_entry.owner}/{repo_entry.repo}",
+                button_text,
                 callback_data=f"gitsettings_show_{repo_entry.id}_{page}"
             )
         ])
@@ -140,6 +150,7 @@ async def send_branch_selection_list(
     all_branches = cached_data["branches"]
     original_settings_list_page = cached_data["original_settings_list_page"]
     current_monitored_branch = cached_data["current_branch_name"]
+    github_default_branch_name = cached_data.get("github_default_branch")
 
     buttons = []
     start_idx = branch_page * ITEMS_PER_PAGE_BRANCHES
@@ -148,10 +159,23 @@ async def send_branch_selection_list(
 
     for i, branch_name in enumerate(paginated_branches):
         actual_branch_index = start_idx + i
-        is_current = "✔️ " if branch_name == current_monitored_branch else "❌ "
+        final_tag = "❌"
+        is_actually_monitored = (current_monitored_branch == branch_name) or \
+                                (current_monitored_branch is None and branch_name == github_default_branch_name)
+        is_github_default = (branch_name == github_default_branch_name)
+
+        if is_actually_monitored and is_github_default:
+            final_tag = "✔️" + S["git_settings"]["github_default_tag"]
+        elif is_actually_monitored:
+            final_tag = "✔️"
+        elif is_github_default:
+            final_tag = "❌ " + S["git_settings"]["github_default_tag"]
+
+        button_text = f"{escape(branch_name)} {final_tag}".strip()
+
         buttons.append([
             InlineKeyboardButton(
-                f"{is_current}{escape(branch_name)}",
+                button_text,
                 callback_data=f"gitsettings_pickbranch_{actual_branch_index}"
             )
         ])
@@ -186,7 +210,11 @@ async def send_branch_selection_list(
     keyboard = InlineKeyboardMarkup(buttons)
 
     header_text = S["git_settings"]["select_branch_header"].format(owner=escape(repo_owner), repo=escape(repo_name_str))
-    current_branch_display = escape(current_monitored_branch) if current_monitored_branch else S["git_settings"]["default_branch_display"]
+    effective_monitored_branch_name = current_monitored_branch
+    if current_monitored_branch is None:
+        effective_monitored_branch_name = github_default_branch_name 
+
+    current_branch_display = escape(effective_monitored_branch_name) if effective_monitored_branch_name else S["git_settings"]["default_branch_display"]
     status_text = S["git_settings"]["current_branch_indicator"].format(branch_name=current_branch_display)
 
     full_text = f"{header_text}\n{status_text}"
