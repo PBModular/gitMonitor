@@ -17,11 +17,12 @@ from typing import Dict, Optional, Any
 class gitMonitorModule(BaseModule):
     def on_init(self):
         self.monitor_tasks: Dict[int, Dict[int, asyncio.Task]] = {} # chat_id -> repo_id -> Task
-        self.github_token = self.module_config.get("api_token")
         self.default_check_interval = self.module_config.get("default_check_interval", 60)
         self.max_retries = self.module_config.get("max_retries", 5)
         self.min_interval = 10 
+        self.active_branch: Dict[int, Dict[str, Any]] = {}
 
+        self.github_token = self.module_config.get("api_token")
         if not self.github_token:
             self.logger.warning("Valid GitHub API token not found in config. Rate limits will be lower.")
         self._async_session_maker: Optional[sessionmaker[AsyncSession]] = None
@@ -434,7 +435,7 @@ class gitMonitorModule(BaseModule):
                     repo_entry = await db_ops.get_repo_by_url(session, chat_id, identifier)
             
             if repo_entry:
-                await send_repo_settings_panel(message, repo_entry, self.S, current_list_page=0)
+                await send_repo_settings_panel(message, repo_entry, self.S, current_list_page=0, module_instance=self)
             else:
                 await message.reply(self.S["git_settings"]["repo_not_found"].format(identifier=identifier))
         else:
@@ -443,7 +444,7 @@ class gitMonitorModule(BaseModule):
             if not repos:
                 await message.reply(self.S["list_repos"]["none"])
                 return
-            await send_repo_selection_list(message, repos, 0, self.S)
+            await send_repo_selection_list(message, repos, 0, self.S, self)
 
     @allowed_for(["owner", "chat_admins"])
     @callback_query(filters.regex(r"^gitsettings_.*"))

@@ -81,6 +81,17 @@ class GitHubAPIClient:
             self.logger.warning(f"aiohttp.ClientError during request to {url}: {e}")
             raise ClientRequestError(0, str(e)) 
 
+    async def fetch_branches(
+        self,
+        owner: str,
+        repo: str,
+        per_page: int = 15
+    ) -> GitHubAPIResponse:
+        """Fetches all branches for a repository."""
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/branches"
+        params: Dict[str, Any] = {"per_page": per_page}
+        return await self._request("GET", url, params=params)
+
     async def fetch_commits(
         self,
         owner: str,
