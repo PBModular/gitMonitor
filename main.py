@@ -160,9 +160,10 @@ class gitMonitorModule(BaseModule):
         finally:
             if not should_stop_permanently:
                 if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
-                    del self.monitor_tasks[chat_id][repo_id]
-                    if not self.monitor_tasks[chat_id]:
-                        del self.monitor_tasks[chat_id]
+                    if self.monitor_tasks[chat_id][repo_id] is asyncio.current_task():
+                        del self.monitor_tasks[chat_id][repo_id]
+                        if not self.monitor_tasks[chat_id]:
+                            del self.monitor_tasks[chat_id]
             task_logger.info(f"Monitor wrapper for repo ID {repo_id} finished. Permanent stop: {should_stop_permanently}")
 
     async def _stop_monitor_task(self, chat_id: int, repo_id: int) -> bool:
