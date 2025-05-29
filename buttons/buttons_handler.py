@@ -1,7 +1,5 @@
 import asyncio
-import urllib.parse
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
-from pyrogram import filters
 from typing import List, TYPE_CHECKING, Any, Optional, Dict
 from html import escape
 
@@ -41,7 +39,7 @@ async def send_repo_selection_list(
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(S["git_settings"]["prev_btn"], callback_data=f"gitsettings_list_{page-1}"))
     if total_pages > 1:
-         nav_buttons.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="gitsettings_dummy"))
+        nav_buttons.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="gitsettings_dummy"))
     if end_idx < len(repos):
         nav_buttons.append(InlineKeyboardButton(S["git_settings"]["next_btn"], callback_data=f"gitsettings_list_{page+1}"))
     
@@ -84,12 +82,12 @@ async def send_repo_settings_panel(
 
     buttons = [
         [InlineKeyboardButton(
-            S["git_settings"]["commits_monitoring"].format(status=commit_status),
-            callback_data=f"gitsettings_toggle_commits_{repo_entry.id}_{current_list_page}"
-        )],
-        [InlineKeyboardButton(
             S["git_settings"]["branch_btn"].format(branch_name=current_branch_display),
             callback_data=f"gitsettings_setbranch_{repo_entry.id}_{current_list_page}"
+        )],
+        [InlineKeyboardButton(
+            S["git_settings"]["commits_monitoring"].format(status=commit_status),
+            callback_data=f"gitsettings_toggle_commits_{repo_entry.id}_{current_list_page}"
         )],
         [InlineKeyboardButton(
             S["git_settings"]["issues_monitoring"].format(status=issue_status),
@@ -99,8 +97,8 @@ async def send_repo_settings_panel(
             S["git_settings"]["tags_monitoring"].format(status=tag_status),
             callback_data=f"gitsettings_toggle_tags_{repo_entry.id}_{current_list_page}"
         )],
-        [InlineKeyboardButton(S["git_settings"]["back_to_list_btn"], callback_data=f"gitsettings_list_{current_list_page}")],
-        [InlineKeyboardButton(S["git_settings"]["close_btn"], callback_data="gitsettings_close")]
+        [InlineKeyboardButton(S["git_settings"]["back_to_list_btn"], callback_data=f"gitsettings_list_{current_list_page}"),
+         InlineKeyboardButton(S["git_settings"]["close_btn"], callback_data="gitsettings_close")]
     ]
     keyboard = InlineKeyboardMarkup(buttons)
 
@@ -146,40 +144,42 @@ async def send_branch_selection_list(
     end_idx = start_idx + ITEMS_PER_PAGE_BRANCHES
     paginated_branches = all_branches[start_idx:end_idx]
 
-    if branch_page == 0:
-        buttons.append([
-            InlineKeyboardButton(
-                S["git_settings"]["monitor_default_branch_btn"],
-                callback_data=f"gitsettings_pickbranch_DEFAULT"
-            )
-        ])
-
     for i, branch_name in enumerate(paginated_branches):
         actual_branch_index = start_idx + i
-        is_current = " (*)" if branch_name == current_monitored_branch else ""
+        is_current = "✔️ " if branch_name == current_monitored_branch else "❌ "
         buttons.append([
             InlineKeyboardButton(
-                f"{escape(branch_name)}{is_current}",
+                f"{is_current}{escape(branch_name)}",
                 callback_data=f"gitsettings_pickbranch_{actual_branch_index}"
             )
         ])
 
-    nav_buttons = []
     total_pages = (len(all_branches) + ITEMS_PER_PAGE_BRANCHES - 1) // ITEMS_PER_PAGE_BRANCHES
+    branch_pagination_row = []
     if branch_page > 0:
-        nav_buttons.append(InlineKeyboardButton(S["git_settings"]["prev_btn"], callback_data=f"gitsettings_branchpage_{branch_page-1}"))
+        branch_pagination_row.append(InlineKeyboardButton(
+            S["git_settings"]["prev_btn"], callback_data=f"gitsettings_branchpage_{branch_page-1}"
+        ))
     if total_pages > 1:
-        nav_buttons.append(InlineKeyboardButton(
+        branch_pagination_row.append(InlineKeyboardButton(
             S["git_settings"]["branch_page_indicator"].format(current_page=branch_page + 1, total_pages=total_pages),
             callback_data="gitsettings_dummy"
         ))
     if end_idx < len(all_branches):
-        nav_buttons.append(InlineKeyboardButton(S["git_settings"]["next_btn"], callback_data=f"gitsettings_branchpage_{branch_page+1}"))
+        branch_pagination_row.append(InlineKeyboardButton(
+            S["git_settings"]["next_btn"], callback_data=f"gitsettings_branchpage_{branch_page+1}"
+        ))
+    
+    if branch_pagination_row:
+        buttons.append(branch_pagination_row)
 
-    if nav_buttons:
-        buttons.append(nav_buttons)
-
-    buttons.append([InlineKeyboardButton(S["git_settings"]["back_to_settings_btn"], callback_data=f"gitsettings_show_{repo_id}_{original_settings_list_page}")]) # Back to specific repo panel
+    action_row = []
+    action_row.append(InlineKeyboardButton(S["git_settings"]["back_to_settings_btn"], callback_data=f"gitsettings_show_{repo_id}_{original_settings_list_page}"))
+    if branch_page == 0:
+        action_row.append(InlineKeyboardButton(S["git_settings"]["monitor_default_branch_btn"], callback_data=f"gitsettings_pickbranch_DEFAULT"))
+    
+    if action_row:
+        buttons.append(action_row)
 
     keyboard = InlineKeyboardMarkup(buttons)
 
