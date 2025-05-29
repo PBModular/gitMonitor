@@ -11,7 +11,7 @@ from .db import Base, MonitoredRepo
 from . import db_ops
 from .monitoring.orchestrator import RepoMonitorOrchestrator
 from .utils import parse_github_url
-from .buttons.buttons_handler import send_repo_selection_list, send_repo_settings_panel, handle_settings_callback
+from .buttons.handler import send_repo_selection_list, send_repo_settings_panel, handle_settings_callback
 from typing import Dict, Optional, Any
 
 class gitMonitorModule(BaseModule):

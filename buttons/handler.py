@@ -4,7 +4,7 @@ from typing import List, TYPE_CHECKING, Any, Optional, Dict
 
 from ..api.github_api import GitHubAPIClient, APIError
 from .. import db_ops
-from .buttons_processor import send_branch_selection_list, send_repo_selection_list, send_repo_settings_panel
+from .processor import send_branch_selection_list, send_repo_selection_list, send_repo_settings_panel
 
 if TYPE_CHECKING:
     from ..main import gitMonitorModule
