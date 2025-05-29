@@ -12,7 +12,7 @@ ITEMS_PER_PAGE_BRANCHES = 8
 ITEMS_PER_PAGE = 5
 
 async def send_repo_selection_list(
-    message: Message,
+    message_or_call: Any,
     repos: List[MonitoredRepo],
     page: int,
     S: dict,
@@ -50,12 +50,16 @@ async def send_repo_selection_list(
     text = S["git_settings"]["select_repo_header"]
     
     try:
-        if message.from_user and message.from_user.is_self and not isinstance(message, CallbackQuery):
-            await message.edit_text(text, reply_markup=keyboard)
-        elif isinstance(message, CallbackQuery):
-            await message.edit_message_text(text, reply_markup=keyboard)
-        else:
-            await message.reply_text(text, reply_markup=keyboard)
+        if isinstance(message_or_call, CallbackQuery):
+            await message_or_call.edit_message_text(text, reply_markup=keyboard)
+        elif isinstance(message_or_call, Message):
+            if message_or_call.from_user and message_or_call.from_user.is_self:
+                try:
+                    await message_or_call.edit_text(text, reply_markup=keyboard)
+                except Exception: 
+                    await message_or_call.reply_text(text, reply_markup=keyboard)
+            else:
+                await message_or_call.reply_text(text, reply_markup=keyboard)
     except Exception as e:
         module_instance.logger.error(f"Error sending/editing repo selection list: {e}")
 
