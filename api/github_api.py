@@ -86,10 +86,13 @@ class GitHubAPIClient:
         owner: str,
         repo: str,
         etag: Optional[str] = None,
-        per_page: int = 30
+        per_page: int = 30,
+        sha_or_branch: Optional[str] = None
         ) -> GitHubAPIResponse:
         url = f"{self.BASE_URL}/repos/{owner}/{repo}/commits"
-        params = {"per_page": per_page}
+        params: Dict[str, Any] = {"per_page": per_page}
+        if sha_or_branch:
+            params["sha"] = sha_or_branch
         headers = {}
         if etag:
             headers["If-None-Match"] = etag
@@ -107,7 +110,7 @@ class GitHubAPIClient:
         since: Optional[str] = None
     ) -> GitHubAPIResponse:
         url = f"{self.BASE_URL}/repos/{owner}/{repo}/issues"
-        params = {"per_page": per_page, "sort": sort, "direction": direction, "state": state}
+        params: Dict[str, Any] = {"per_page": per_page, "sort": sort, "direction": direction, "state": state}
         if since:
             params["since"] = since
             
@@ -124,7 +127,7 @@ class GitHubAPIClient:
         per_page: int = 30
     ) -> GitHubAPIResponse:
         url = f"{self.BASE_URL}/repos/{owner}/{repo}/tags"
-        params = {"per_page": per_page}
+        params: Dict[str, Any] = {"per_page": per_page}
         headers = {}
         if etag:
             headers["If-None-Match"] = etag

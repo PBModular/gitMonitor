@@ -1,6 +1,7 @@
+import asyncio
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
-from typing import List, Tuple, TYPE_CHECKING
+from pyrogram import filters
+from typing import List, TYPE_CHECKING, Any, Optional, Dict
 
 from ..db import MonitoredRepo
 from .. import db_ops
@@ -48,8 +49,10 @@ async def send_repo_selection_list(
     text = S["git_settings"]["select_repo_header"]
     
     try:
-        if message.from_user and message.from_user.is_self:
+        if message.from_user and message.from_user.is_self and not isinstance(message, CallbackQuery):
             await message.edit_text(text, reply_markup=keyboard)
+        elif isinstance(message, CallbackQuery):
+            await message.edit_message_text(text, reply_markup=keyboard)
         else:
             await message.reply_text(text, reply_markup=keyboard)
     except Exception as e:
@@ -61,7 +64,7 @@ async def send_repo_selection_list(
 
 
 async def send_repo_settings_panel(
-    call_or_message,
+    call_or_message: Any,
     repo_entry: MonitoredRepo,
     S: dict,
     current_list_page: int = 0
@@ -74,11 +77,17 @@ async def send_repo_settings_panel(
     commit_status = S["git_settings"]["status_enabled"] if repo_entry.monitor_commits else S["git_settings"]["status_disabled"]
     issue_status = S["git_settings"]["status_enabled"] if repo_entry.monitor_issues else S["git_settings"]["status_disabled"]
     tag_status = S["git_settings"]["status_enabled"] if repo_entry.monitor_tags else S["git_settings"]["status_disabled"]
+    
+    current_branch_display = repo_entry.branch or S["git_settings"]["default_branch_display"]
 
     buttons = [
         [InlineKeyboardButton(
             S["git_settings"]["commits_monitoring"].format(status=commit_status),
             callback_data=f"gitsettings_toggle_commits_{repo_entry.id}_{current_list_page}"
+        )],
+        [InlineKeyboardButton(
+            S["git_settings"]["branch_btn"].format(branch_name=current_branch_display),
+            callback_data=f"gitsettings_setbranch_{repo_entry.id}_{current_list_page}"
         )],
         [InlineKeyboardButton(
             S["git_settings"]["issues_monitoring"].format(status=issue_status),
@@ -96,6 +105,12 @@ async def send_repo_settings_panel(
     if isinstance(call_or_message, CallbackQuery):
         await call_or_message.edit_message_text(text, reply_markup=keyboard)
     elif isinstance(call_or_message, Message):
+        if call_or_message.from_user and call_or_message.from_user.is_self:
+            try:
+                await call_or_message.edit_text(text, reply_markup=keyboard)
+                return
+            except Exception:
+                pass
         await call_or_message.reply_text(text, reply_markup=keyboard)
 
 async def handle_settings_callback(
@@ -106,6 +121,7 @@ async def handle_settings_callback(
     S = module_instance.S
     async_session_maker = module_instance.async_session
     chat_id = call.message.chat.id
+    user_id = call.from_user.id
     
     parts = call.data.split("_")
     action_type = parts[1]
@@ -131,7 +147,7 @@ async def handle_settings_callback(
                 except Exception:
                     pass
             return
-        await send_repo_selection_list(call.message, repos, page, S)
+        await send_repo_selection_list(call, repos, page, S)
         await call.answer()
         return
 
@@ -180,8 +196,7 @@ async def handle_settings_callback(
                     new_value = not current_value
                     
                     await db_ops.update_repo_fields(session, repo_id, **{field_to_toggle: new_value})
-                async with session.begin():
-                    updated_repo_entry = await db_ops.get_repo_by_id(session, repo_id)
+                updated_repo_entry = await db_ops.get_repo_by_id(session, repo_id)
 
             if updated_repo_entry:
                 await module_instance._start_monitor_task(updated_repo_entry)
@@ -193,6 +208,108 @@ async def handle_settings_callback(
         except Exception as e:
             module_instance.logger.error(f"Error toggling setting '{field_to_toggle}' for repo {repo_id}: {e}", exc_info=True)
             await call.answer(S["git_settings"]["error"], show_alert=True)
+        return
+
+    if action_type == "setbranch":
+        repo_id = int(parts[2])
+        current_list_page = int(parts[3])
+        original_message_id = call.message.id
+
+        async with async_session_maker() as session:
+            repo_entry_for_prompt = await db_ops.get_repo_by_id(session, repo_id)
+        
+        if not repo_entry_for_prompt or repo_entry_for_prompt.chat_id != chat_id:
+            await call.answer(S["git_settings"]["repo_not_found_generic"], show_alert=True)
+            return
+
+        current_branch_display = repo_entry_for_prompt.branch or S["git_settings"]["default_branch_display"]
+        prompt_text = S["git_settings"]["prompt_branch_name_specific"].format(current_branch=current_branch_display)
+        
+        cancel_button = InlineKeyboardButton(S["git_settings"]["cancel_btn"], callback_data=f"gitsettings_show_{repo_id}_{current_list_page}")
+        await call.edit_message_text(prompt_text, reply_markup=InlineKeyboardMarkup([[cancel_button]]))
+        await call.answer()
+
+        try:
+            response_msg: Message = await module_instance.bot.listen(
+                chat_id=chat_id,
+                user_id=user_id,
+                filters=filters.text & ~filters.command,
+                timeout=60
+            )
+            
+            try: await response_msg.delete()
+            except Exception: pass
+
+            new_branch_name_input = response_msg.text.strip()
+            
+            if not new_branch_name_input:
+                await module_instance.bot.send_message(
+                    chat_id, 
+                    S["git_settings"]["invalid_branch_name"], 
+                    reply_to_message_id=original_message_id if call.message.chat.type != "private" else None)
+                await send_repo_settings_panel(call, repo_entry_for_prompt, S, current_list_page)
+                return
+
+            new_branch_name: Optional[str]
+            if new_branch_name_input.lower() in ["default", "clear", "none", ""]:
+                new_branch_name = None
+            else:
+                new_branch_name = new_branch_name_input
+
+            updated_repo_entry = None
+            async with async_session_maker() as session:
+                async with session.begin():
+                    repo_to_update = await db_ops.get_repo_by_id(session, repo_id)
+                    if not repo_to_update or repo_to_update.chat_id != chat_id:
+                        await module_instance.bot.send_message(chat_id, S["git_settings"]["repo_not_found_generic"])
+                        return
+
+                    update_payload: Dict[str, Any] = {"branch": new_branch_name}
+                    if repo_to_update.branch != new_branch_name:
+                        module_instance.logger.info(f"Branch changing for repo {repo_id} from '{repo_to_update.branch}' to '{new_branch_name}'. Resetting commit state.")
+                        update_payload["last_commit_sha"] = None
+                        update_payload["commit_etag"] = None
+                    
+                    await db_ops.update_repo_fields(session, repo_id, **update_payload)
+                
+                updated_repo_entry = await db_ops.get_repo_by_id(session, repo_id)
+
+            if updated_repo_entry:
+                await module_instance._start_monitor_task(updated_repo_entry)
+                await send_repo_settings_panel(call, updated_repo_entry, S, current_list_page)
+                
+                branch_confirm_display = new_branch_name or S["git_settings"]["default_branch_display"]
+                await module_instance.bot.send_message(
+                    chat_id, 
+                    S["git_settings"]["branch_updated_ok"].format(branch_name=branch_confirm_display),
+                    reply_to_message_id=original_message_id if call.message.chat.type != "private" else None
+                )
+            else:
+                await module_instance.bot.send_message(chat_id, S["git_settings"]["error"])
+
+
+        except asyncio.TimeoutError:
+            async with async_session_maker() as session:
+                repo_entry_after_timeout = await db_ops.get_repo_by_id(session, repo_id)
+            if repo_entry_after_timeout:
+                await send_repo_settings_panel(call, repo_entry_after_timeout, S, current_list_page)
+            
+            await module_instance.bot.send_message(
+                chat_id, 
+                S["git_settings"]["branch_set_timeout"],
+                reply_to_message_id=original_message_id if call.message.chat.type != "private" else None
+            )
+        except Exception as e:
+            module_instance.logger.error(f"Error in setbranch listen/update flow for repo {repo_id}: {e}", exc_info=True)
+            try:
+                async with async_session_maker() as session:
+                    repo_entry_fallback = await db_ops.get_repo_by_id(session, repo_id)
+                if repo_entry_fallback:
+                    await send_repo_settings_panel(call, repo_entry_fallback, S, current_list_page)
+            except Exception as restore_err:
+                module_instance.logger.error(f"Failed to restore panel after setbranch error: {restore_err}")
+            
+            await module_instance.bot.send_message(chat_id, S["git_settings"]["error"])
         return
 
     await call.answer("Unknown settings action.", show_alert=True)

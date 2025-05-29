@@ -1,6 +1,6 @@
 from sqlalchemy import select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from .db import MonitoredRepo
 
@@ -23,6 +23,7 @@ async def create_repo_entry(
     repo_url: str,
     owner: str,
     repo_name: str,
+    branch: Optional[str] = None,
     check_interval: Optional[int] = None,
     last_commit_sha: Optional[str] = None,
     commit_etag: Optional[str] = None,
@@ -40,6 +41,7 @@ async def create_repo_entry(
         repo_url=repo_url,
         owner=owner,
         repo=repo_name,
+        branch=branch,
         check_interval=check_interval,
         last_commit_sha=last_commit_sha,
         commit_etag=commit_etag,
@@ -91,7 +93,7 @@ async def get_all_active_repos(session: AsyncSession) -> List[MonitoredRepo]:
     result = await session.execute(select(MonitoredRepo))
     return result.scalars().all()
 
-async def update_repo_fields(session: AsyncSession, repo_db_id: int, **fields_to_update) -> bool:
+async def update_repo_fields(session: AsyncSession, repo_db_id: int, **fields_to_update: Any) -> bool:
     """
     Updates specified fields for a MonitoredRepo entry.
     Fields not present in fields_to_update will not be changed.

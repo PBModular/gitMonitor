@@ -45,7 +45,13 @@ def identify_new_commits(
     return new_commits_list, latest_commit_sha_on_github, False, force_pushed_or_many_new
 
 
-def format_single_commit_message(commit_data: Dict[str, Any], owner: str, repo: str, strings: Dict) -> str:
+def format_single_commit_message(
+    commit_data: Dict[str, Any], 
+    owner: str, 
+    repo: str, 
+    strings: Dict, 
+    branch_name: Optional[str] = None
+) -> str:
     """Formats a notification message for a single commit."""
     merge_info = get_merge_info(commit_data)
     merge_indicator = ''
@@ -63,9 +69,14 @@ def format_single_commit_message(commit_data: Dict[str, Any], owner: str, repo: 
     sha_short = commit_data['sha'][:7]
     commit_url = escape(commit_data.get("html_url", "#"))
 
+    branch_indicator = ""
+    if branch_name:
+        branch_indicator = f" ({escape(branch_name)})"
+
     return strings["monitor"]["new_commit"].format(
         owner=escape(owner),
         repo=escape(repo),
+        branch_indicator=branch_indicator,
         author=author_name,
         message=commit_message,
         merge_indicator=merge_indicator,
@@ -79,7 +90,8 @@ def format_multiple_commits_message(
     repo: str, 
     strings: Dict,
     previous_known_sha: Optional[str],
-    max_to_list: int
+    max_to_list: int,
+    branch_name: Optional[str] = None
 ) -> str:
     """Formats a notification message for multiple new commits."""
     count = len(new_commits_data_newest_first)
@@ -131,10 +143,15 @@ def format_multiple_commits_message(
             compare_url = escape(f"https://github.com/{owner}/{repo}/compare/{compare_url_base}...{compare_url_head}")
             more_link_text = strings["monitor"]["more_commits"].format(compare_url=compare_url)
 
+    branch_indicator = ""
+    if branch_name:
+        branch_indicator = f" ({escape(branch_name)})"
+
     text = strings["monitor"]["multiple_new_commits"].format(
         count=count,
         owner=escape(owner),
         repo=escape(repo),
+        branch_indicator=branch_indicator,
         commit_list="\n".join(commit_list_lines),
         latest_sha=latest_sha_short_notif
     )

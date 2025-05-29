@@ -11,21 +11,24 @@ class CommitChecker(BaseChecker):
         super().__init__(*args, **kwargs)
         self.current_last_sha: Optional[str] = None
         self.current_commit_etag: Optional[str] = None
+        self.branch: Optional[str] = None
         self.max_commits_to_list = self.config.get("max_commits", 4)
 
     async def load_initial_state(self) -> None:
         self.current_last_sha = self.repo_entry.last_commit_sha
         self.current_commit_etag = self.repo_entry.commit_etag
+        self.branch = self.repo_entry.branch
 
     async def clear_state_on_disable(self) -> None:
-        self.logger.info(f"Disabling for {self.owner}/{self.repo_name}. Clearing ETag if set.")
+        self.logger.info(f"Disabling commit monitoring for {self.owner}/{self.repo_name} (branch: {self.branch or 'default'}). Clearing ETag if set.")
         if self.current_commit_etag:
             await self._update_db({"commit_etag": None})
         self.current_commit_etag = None
 
     async def check(self) -> None:
         api_response = await self.api_client.fetch_commits(
-            self.owner, self.repo_name, etag=self.current_commit_etag, per_page=30
+            self.owner, self.repo_name, etag=self.current_commit_etag, per_page=30,
+            sha_or_branch=self.branch
         )
 
         db_updates = {}
@@ -41,36 +44,41 @@ class CommitChecker(BaseChecker):
             new_etag_from_response = api_response.etag
 
             if not github_commits_data or not isinstance(github_commits_data, list) or not github_commits_data[0].get("sha"):
-                self.logger.warning(f"Invalid or empty commit data despite 200 OK. Skipping.")
+                self.logger.warning(f"Invalid or empty commit data for branch '{self.branch or 'default'}' despite 200 OK. Skipping.")
             else:
                 newly_found_commits, latest_sha_on_github, is_initial, force_pushed_or_many = \
                     identify_new_commits(github_commits_data, self.current_last_sha)
 
                 if is_initial:
-                    self.logger.info(f"Initial run. Latest SHA: {latest_sha_on_github[:7] if latest_sha_on_github else 'None'}")
+                    self.logger.info(f"Initial run for branch '{self.branch or 'default'}'. Latest SHA: {latest_sha_on_github[:7] if latest_sha_on_github else 'None'}")
                     if latest_sha_on_github:
                         self.current_last_sha = latest_sha_on_github
                         db_updates["last_commit_sha"] = self.current_last_sha
                 
                 elif newly_found_commits:
-                    self.logger.info(f"Found {len(newly_found_commits)} new commit(s).")
+                    self.logger.info(f"Found {len(newly_found_commits)} new commit(s) on branch '{self.branch or 'default'}'.")
                     if force_pushed_or_many:
                         self.logger.warning(f"Previously known SHA {self.current_last_sha[:7] if self.current_last_sha \
-                                            else 'None'} not found. Possible force push or >30 new commits.")
+                                            else 'None'} not found on branch '{self.branch or 'default'}'. Possible force push or >30 new commits.")
 
                     new_sha_to_store = newly_found_commits[0]['sha']
                     prev_sha_for_msg = self.current_last_sha
                     self.current_last_sha = new_sha_to_store
                     db_updates["last_commit_sha"] = self.current_last_sha
                     
+                    branch_name_for_msg = self.branch
                     try:
                         if len(newly_found_commits) == 1:
-                            message_text = format_single_commit_message(newly_found_commits[0], self.owner, self.repo_name, self.strings)
+                            message_text = format_single_commit_message(
+                                newly_found_commits[0], self.owner, self.repo_name, self.strings,
+                                branch_name=branch_name_for_msg
+                            )
                         else:
                             message_text = format_multiple_commits_message(
                                 newly_found_commits, self.owner, self.repo_name, self.strings,
                                 previous_known_sha=prev_sha_for_msg,
-                                max_to_list=self.max_commits_to_list
+                                max_to_list=self.max_commits_to_list,
+                                branch_name=branch_name_for_msg
                             )
                         await self.bot.send_message(self.chat_id, message_text, disable_web_page_preview=True, parse_mode=ParseMode.HTML)
                     except RPCError as rpc_e:
@@ -83,7 +91,7 @@ class CommitChecker(BaseChecker):
                     db_updates["last_commit_sha"] = self.current_last_sha
 
             if new_etag_from_response and new_etag_from_response != self.current_commit_etag:
-                self.logger.info(f"ETag changed on 200 OK. Updating.")
+                self.logger.info(f"ETag changed on 200 OK for branch '{self.branch or 'default'}'. Updating.")
                 self.current_commit_etag = new_etag_from_response
                 db_updates["commit_etag"] = self.current_commit_etag
 

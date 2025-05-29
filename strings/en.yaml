@@ -3,18 +3,18 @@ help: |
   Monitors one or more GitHub repositories for new commits, issues, and tags.
 
   <b>Commands:</b>
-  <code>/git_add <repo_url></code> - Start monitoring a new GitHub repository (e.g., <code>https://github.com/owner/repo</code>).
+  <code>/git_add <repo_url> [branch_name]</code> - Start monitoring a new GitHub repository (e.g., <code>https://github.com/owner/repo</code>). If branch_name is omitted, the default branch is used.
   <code>/git_remove <github_repo_url>/<repo_id></code> - Stop monitoring the specified repository. You can get ID from /git_list.
   <code>/git_list</code> - List all repositories currently being monitored.
   <code>/git_interval <github_repo_url>/<repo_id> <seconds></code> - Set a custom check interval for a specific repository. Minimum interval is {min_interval} seconds.
-  <code>/git_settings [github_repo_url>/<repo_id]</code> - Configure monitoring options (commits/issues/tags). If no argument, shows a list.
+  <code>/git_settings [github_repo_url>/<repo_id]</code> - Configure monitoring options (commits/issues/tags/branch). If no argument, shows a list.
 add_repo:
-  usage: "Usage: /git_add <github_repo_url>"
+  usage: "Usage: /git_add <github_repo_url> [branch_name]"
   invalid_url: "❌ Invalid GitHub URL provided: <code>{repo_url}</code>\nPlease use the format: https://github.com/owner/repository"
   starting: "🔄 Adding monitor for {owner}/{repo}..."
-  success: "✅ Now monitoring repository <b>{owner}/{repo}</b> for new commits, issues, and tags."
+  success: "✅ Now monitoring repository <b>{owner}/{repo}</b> (branch: <b>{branch_name_display}</b>) for new commits, issues, and tags."
   error_generic: "❌ An error occurred while adding the repository monitor. Please try again later."
-  already_monitoring: "ℹ️ Repository <b>{owner}/{repo}</b> is already being monitored."
+  already_monitoring: "ℹ️ Repository <b>{owner}/{repo}</b> is already being monitored in this chat."
 remove_repo:
   usage: "Usage: /git_remove <github_repo_url>/<repo_id>"
   usage_hint: "ℹ️ Use /git_list to see the URLs and IDs of repositories currently being monitored."
@@ -26,17 +26,17 @@ list_repos:
   header: "ℹ️ Currently monitored repositories:"
   none: "ℹ️ No GitHub repositories are currently being monitored."
   error: "❌ An error occurred while fetching the list of monitored repositories."
-  repo_line_format: "• ID: {id} <code>{repo_url}</code> ({interval_str}) C:{commit_status} I:{issue_status} T:{tag_status}"
+  repo_line_format: "• ID: {id} <code>{repo_url}</code> (Br: <b>{branch_name_display}</b>, Int: {interval_str}) C:{commit_status} I:{issue_status} T:{tag_status}"
   status_enabled: "✓"
   status_disabled: "✗"
 monitor:
   new_commit: |
-    📦 New commit in <b>{owner}/{repo}</b>
+    📦 New commit in <b>{owner}/{repo}</b>{branch_indicator}
     👤 <b>Author:</b> {author}
     📝 <i>{message}</i>{merge_indicator}
     🔗 <a href="{commit_url}">{sha}</a>
   multiple_new_commits: |
-    📦 <b>{count} new commits</b> in <b>{owner}/{repo}</b>
+    📦 <b>{count} new commits</b> in <b>{owner}/{repo}</b>{branch_indicator}
 
     {commit_list}
   commit_line: "  • <a href=\"{url}\">{sha}</a>: {message}{merge_indicator} (<i>{author}</i>)"
@@ -100,6 +100,13 @@ git_settings:
   tags_monitoring: "Tags: {status}"
   status_enabled: "✅ Enabled"
   status_disabled: "❌ Disabled"
+  branch_btn: "Branch: {branch_name}"
+  default_branch_display: "Default"
+  prompt_branch_name_specific: "Current branch: <b>{current_branch}</b>.\n\nPlease reply with the new branch name for this repository.\nSend <code>default</code> to monitor the default branch."
+  invalid_branch_name: "❌ Invalid branch name. It cannot be empty."
+  branch_set_timeout: "⏰ Timed out waiting for branch name. No changes made."
+  branch_updated_ok: "✅ Branch updated to <b>{branch_name}</b>. Monitor has been reconfigured for the new branch."
+  cancel_btn: "✖️ Cancel"
   back_to_list_btn: "🔙 Back to List"
   prev_btn: "◀️ Prev"
   next_btn: "Next ▶️"

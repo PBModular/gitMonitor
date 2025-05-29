@@ -12,7 +12,7 @@ from . import db_ops
 from .monitoring.orchestrator import RepoMonitorOrchestrator
 from .utils import parse_github_url
 from .buttons.buttons_handler import send_repo_selection_list, send_repo_settings_panel, handle_settings_callback
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 class gitMonitorModule(BaseModule):
     def on_init(self):
@@ -49,7 +49,8 @@ class gitMonitorModule(BaseModule):
                 repos_to_monitor = await db_ops.get_all_active_repos(session)
 
                 for repo_entry in repos_to_monitor:
-                    self.logger.info(f"Restarting monitor for chat {repo_entry.chat_id} on repo {repo_entry.repo_url} (DB ID: {repo_entry.id})")
+                    self.logger.info(f"Restarting monitor for chat {repo_entry.chat_id} on repo {repo_entry.repo_url} "
+                                     f"(DB ID: {repo_entry.id}, Branch: {repo_entry.branch or 'default'})")
                     await self._start_monitor_task(repo_entry)
                     restarted_count += 1
 
@@ -105,7 +106,7 @@ class gitMonitorModule(BaseModule):
             self.logger.error(f"Attempted to start monitor for repo ID {repo_entry.id} with invalid owner/repo. Skipping.")
             return
 
-        task_logger_name = f"MonitorTask[{chat_id}][{repo_id}]"
+        task_logger_name = f"MonitorTask[{chat_id}][{repo_id}][{repo_entry.owner}/{repo_entry.repo}{f'@{repo_entry.branch}' if repo_entry.branch else ''}]"
         task_specific_logger = self.logger.getChild(task_logger_name)
 
         orchestrator_module_config = {
@@ -124,7 +125,8 @@ class gitMonitorModule(BaseModule):
         if chat_id not in self.monitor_tasks:
             self.monitor_tasks[chat_id] = {}
         self.monitor_tasks[chat_id][repo_id] = task
-        self.logger.info(f"Created/restarted monitor task for chat {chat_id}, repo ID {repo_id} ({repo_entry.owner}/{repo_entry.repo}), interval {check_interval}s. "
+        self.logger.info(f"Created/restarted monitor task for chat {chat_id}, repo ID {repo_id} ({repo_entry.owner}/{repo_entry.repo}, "
+                         f"Branch: {repo_entry.branch or 'default'}, Interval: {check_interval}s). "
                          f"C:{'✓' if repo_entry.monitor_commits else '✗'} I:{'✓' if repo_entry.monitor_issues else '✗'} T:{'✓' if repo_entry.monitor_tags else '✗'}")
 
     async def _monitor_wrapper(self, repo_entry: MonitoredRepo, check_interval: int, module_config_for_orchestrator: Dict[str, Any], task_logger: logging.Logger):
@@ -174,7 +176,7 @@ class gitMonitorModule(BaseModule):
             if not self.monitor_tasks[chat_id]:
                 del self.monitor_tasks[chat_id]
             
-            if not task.done():
+            if task and not task.done():
                 task.cancel()
                 try:
                     await task
@@ -182,7 +184,7 @@ class gitMonitorModule(BaseModule):
                     self.logger.info(f"Monitor task for chat {chat_id}, repo ID {repo_id} successfully cancelled.")
                 except Exception as e:
                     self.logger.error(f"Error awaiting task cancellation for repo ID {repo_id}: {e}")
-            else:
+            elif task:
                 self.logger.info(f"Monitor task for chat {chat_id}, repo ID {repo_id} was already done.")
             task_found_and_stopped = True
         return task_found_and_stopped
@@ -193,7 +195,7 @@ class gitMonitorModule(BaseModule):
             await self._stop_monitor_task(chat_id, repo_id)
         else:
             if chat_id in self.monitor_tasks and repo_id in self.monitor_tasks[chat_id]:
-                del self.monitor_tasks[chat_id][repo_id]
+                self.monitor_tasks[chat_id].pop(repo_id, None)
                 if not self.monitor_tasks[chat_id]:
                     del self.monitor_tasks[chat_id]
 
@@ -219,6 +221,12 @@ class gitMonitorModule(BaseModule):
             return
 
         repo_url = message.command[1].strip().rstrip('/')
+        branch_name: Optional[str] = None
+        if len(message.command) > 2:
+            branch_name = message.command[2].strip()
+            if not branch_name:
+                branch_name = None 
+        
         owner, repo_name_parsed = parse_github_url(repo_url)
         if not owner or not repo_name_parsed:
             await message.reply(self.S["add_repo"]["invalid_url"].format(repo_url=repo_url))
@@ -249,12 +257,18 @@ class gitMonitorModule(BaseModule):
                         repo_url=repo_url,
                         owner=owner,
                         repo_name=repo_name_parsed,
+                        branch=branch_name
                     )
                 
-                self.logger.info(f"Added repo {owner}/{repo_name_parsed} (ID: {new_repo_entry.id}) to DB for chat {chat_id}")
+                self.logger.info(f"Added repo {owner}/{repo_name_parsed} (Branch: {branch_name or 'default'}, ID: {new_repo_entry.id}) to DB for chat {chat_id}")
                 await self._start_monitor_task(new_repo_entry)
 
-                success_text = self.S["add_repo"]["success"].format(owner=owner, repo=repo_name_parsed)
+                branch_display_for_msg = branch_name if branch_name else self.S["git_settings"]["default_branch_display"]
+                success_text = self.S["add_repo"]["success"].format(
+                    owner=owner, 
+                    repo=repo_name_parsed, 
+                    branch_name_display=branch_display_for_msg
+                )
                 if confirmation_msg: await confirmation_msg.edit_text(success_text)
                 else: await self.bot.send_message(chat_id, success_text)
 
@@ -331,11 +345,14 @@ class gitMonitorModule(BaseModule):
                     commit_status = self.S["list_repos"]["status_enabled"] if repo_entry.monitor_commits else self.S["list_repos"]["status_disabled"]
                     issue_status = self.S["list_repos"]["status_enabled"] if repo_entry.monitor_issues else self.S["list_repos"]["status_disabled"]
                     tag_status = self.S["list_repos"]["status_enabled"] if repo_entry.monitor_tags else self.S["list_repos"]["status_disabled"]
+                    branch_display = repo_entry.branch or self.S["git_settings"]["default_branch_display"]
+
 
                     repos_list_text_parts.append(
                         self.S["list_repos"]["repo_line_format"].format(
                             id=repo_entry.id,
                             repo_url=repo_entry.repo_url,
+                            branch_name_display=branch_display,
                             interval_str=interval_str,
                             commit_status=commit_status,
                             issue_status=issue_status,

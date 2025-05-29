@@ -15,6 +15,7 @@ class MonitoredRepo(Base):
     owner: Mapped[str] = mapped_column(nullable=False)
     repo: Mapped[str] = mapped_column(nullable=False)
     check_interval: Mapped[Optional[int]] = mapped_column(nullable=True)
+    branch: Mapped[Optional[str]] = mapped_column(nullable=True)
 
     # Commit
     last_commit_sha: Mapped[Optional[str]] = mapped_column(nullable=True)
@@ -45,6 +46,7 @@ class MonitoredRepo(Base):
 
     def __repr__(self):
         interval = self.check_interval or 'default'
+        branch_name = self.branch or 'default'
         sha = self.last_commit_sha[:7] if self.last_commit_sha else 'None'
         issue_num = self.last_known_issue_number if self.last_known_issue_number else 'None'
         closed_ts = self.last_closed_issue_update_ts if self.last_closed_issue_update_ts else 'None'
@@ -52,6 +54,6 @@ class MonitoredRepo(Base):
         commits_mon = 'C✓' if self.monitor_commits else 'C✗'
         issues_mon = 'I✓' if self.monitor_issues else 'I✗'
         tags_mon = 'T✓' if self.monitor_tags else 'T✗'
-        return (f"MonitoredRepo(id={self.id}, chat_id={self.chat_id}, repo={self.owner}/{self.repo}, "
+        return (f"MonitoredRepo(id={self.id}, chat_id={self.chat_id}, repo={self.owner}/{self.repo}, branch={branch_name}, "
                 f"interval={interval}, last_sha={sha}, last_issue_num={issue_num}, last_closed_ts={closed_ts}, last_tag={tag_name}, "
                 f"mon=({commits_mon},{issues_mon},{tags_mon}))")
