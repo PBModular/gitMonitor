@@ -87,18 +87,18 @@ class gitMonitorModule(BaseModule):
         if chat_id not in self.monitor_tasks:
             self.monitor_tasks[chat_id] = {}
 
-        if repo_id in self.monitor_tasks.get(chat_id, {}):
-            existing_task = self.monitor_tasks[chat_id].pop(repo_id, None)
-            if existing_task and not existing_task.done():
-                self.logger.warning(f"Found existing task for repo ID {repo_id} in chat {chat_id}. Cancelling it before starting new one.")
-                existing_task.cancel()
-                try:
-                    await existing_task
-                except asyncio.CancelledError:
-                    self.logger.info(f"Existing task for repo ID {repo_id} properly cancelled.")
-                except Exception as e:
-                    self.logger.error(f"Error awaiting existing task cancellation for {repo_id}: {e}")
-            if not self.monitor_tasks[chat_id]:
+        existing_task = self.monitor_tasks.get(chat_id, {}).pop(repo_id, None)
+        if existing_task and not existing_task.done():
+            existing_task.cancel()
+            try:
+                await existing_task
+            except asyncio.CancelledError:
+                self.logger.info(f"Existing task for repo ID {repo_id} properly cancelled.")
+            except Exception as e:
+                self.logger.error(f"Error awaiting existing task cancellation for {repo_id}: {e}")
+
+        if not self.monitor_tasks.get(chat_id):
+            if chat_id in self.monitor_tasks:
                 del self.monitor_tasks[chat_id]
 
         if not repo_entry.owner or not repo_entry.repo:
