@@ -432,4 +432,6 @@ class gitMonitorModule(BaseModule):
     @callback_query(filters.regex(r"^gitsettings_.*"))
     async def git_settings_callback_handler(self, _, call: CallbackQuery):
         """Handles all callbacks starting with gitsettings_"""
+        if not hasattr(self.bot, 'ext_module_gitMonitorModule'):
+            setattr(self.bot, 'ext_module_gitMonitorModule', self)
         await handle_settings_callback(call, self)
